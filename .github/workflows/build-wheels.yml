@@ -1,0 +1,222 @@
+name: Build Wheels
+
+on:
+  push:
+    tags:
+      - 'v*'
+  pull_request:
+    paths:
+      - 'leancert/**'
+      - 'examples/**'
+      - 'pyproject.toml'
+      - 'MANIFEST.in'
+      - 'bridge-version.txt'
+      - '.github/workflows/build-wheels.yml'
+  workflow_dispatch:
+    inputs:
+      bridge_tag:
+        description: 'Override bridge release tag (e.g. bridge-v0.1.0)'
+        required: false
+        default: ''
+
+env:
+  BRIDGE_REPO: alerad/leancert-bridge
+
+jobs:
+  build-wheels:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux
+            arch: x86_64
+          - os: macos-15
+            platform: macos
+            arch: x86_64
+          - os: macos-latest
+            platform: macos
+            arch: arm64
+          - os: windows-latest
+            platform: windows
+            arch: x86_64
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Resolve bridge tag
+        shell: bash
+        run: |
+          INPUT_TAG='${{ github.event.inputs.bridge_tag }}'
+          if [ -n "$INPUT_TAG" ]; then
+            TAG="$INPUT_TAG"
+          else
+            TAG="$(tr -d '[:space:]' < bridge-version.txt)"
+          fi
+          if [ -z "$TAG" ]; then
+            echo "bridge tag is empty"
+            exit 1
+          fi
+          echo "Using bridge tag: $TAG"
+          echo "BRIDGE_TAG=$TAG" >> "$GITHUB_ENV"
+
+      - name: Download bridge binary (Unix)
+        if: matrix.platform != 'windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p leancert/bin
+          BASE_URL="https://github.com/${BRIDGE_REPO}/releases/download/${BRIDGE_TAG}"
+          ASSET="lean_bridge-${{ matrix.platform }}-${{ matrix.arch }}"
+          curl -fL "${BASE_URL}/${ASSET}" -o leancert/bin/lean_bridge
+          chmod +x leancert/bin/lean_bridge
+          ls -la leancert/bin/
+
+      - name: Download bridge binary (Windows)
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force leancert\bin | Out-Null
+          $baseUrl = "https://github.com/${env:BRIDGE_REPO}/releases/download/${env:BRIDGE_TAG}"
+          $asset = 'lean_bridge-windows-x86_64.exe'
+          $uri = "$baseUrl/$asset"
+          Invoke-WebRequest -Uri $uri -OutFile 'leancert\bin\lean_bridge.exe'
+          Get-ChildItem leancert\bin
+
+      - name: Install build tools
+        run: pip install build wheel
+
+      - name: Build wheel
+        run: python -m build --wheel
+
+      - name: Rename wheel with platform tag
+        shell: bash
+        run: |
+          case "${{ matrix.platform }}-${{ matrix.arch }}" in
+            linux-x86_64)     PLAT="manylinux2014_x86_64" ;;
+            macos-x86_64)     PLAT="macosx_10_15_x86_64" ;;
+            macos-arm64)      PLAT="macosx_11_0_arm64" ;;
+            windows-x86_64)   PLAT="win_amd64" ;;
+            *)                echo "Unknown platform"; exit 1 ;;
+          esac
+
+          for f in dist/*.whl; do
+            base="$(basename "$f")"
+            newname="${base/py3-none-any/py3-none-$PLAT}"
+            mv "$f" "dist/$newname"
+            echo "Renamed: $base -> $newname"
+          done
+
+      - name: Upload wheel artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheel-${{ matrix.platform }}-${{ matrix.arch }}
+          path: dist/*.whl
+          retention-days: 7
+
+  build-sdist:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install build tools
+        run: pip install build
+
+      - name: Build sdist
+        run: python -m build --sdist
+
+      - name: Upload sdist artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sdist
+          path: dist/*.tar.gz
+
+  test-wheels:
+    needs: build-wheels
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux
+            arch: x86_64
+          - os: macos-latest
+            platform: macos
+            arch: arm64
+          - os: windows-latest
+            platform: windows
+            arch: x86_64
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Download wheel
+        uses: actions/download-artifact@v4
+        with:
+          name: wheel-${{ matrix.platform }}-${{ matrix.arch }}
+          path: dist/
+
+      - name: Install wheel
+        shell: bash
+        run: pip install dist/*.whl numpy
+
+      - name: Run smoke test
+        shell: bash
+        run: |
+          python -c "
+          import leancert as lc
+          x = lc.var('x')
+          result = lc.find_bounds(x**2, {'x': (0, 1)})
+          print(f'min: {result.min_bound}')
+          print(f'max: {result.max_bound}')
+          assert float(result.min_bound.lo) >= 0
+          assert float(result.max_bound.hi) <= 1.01
+          print('Smoke test passed!')
+          "
+
+  publish:
+    needs: [build-wheels, build-sdist, test-wheels]
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+
+    permissions:
+      id-token: write
+
+    steps:
+      - name: Download wheel artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: wheel-*
+          path: dist/
+          merge-multiple: true
+
+      - name: Download sdist artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: sdist
+          path: dist/
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/
+          skip-existing: true
