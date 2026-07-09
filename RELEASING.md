@@ -2,7 +2,7 @@
 
 ## 1. Pick bridge release
 
-Update `bridge-version.txt` to the bridge tag to bundle (for example `bridge-v0.1.0`).
+Update `bridge-version.txt` to the bridge tag to bundle (for example `bridge-v4.31.0`).
 
 ## 2. Validate wheel build
 
