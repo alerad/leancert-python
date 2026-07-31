@@ -69,7 +69,7 @@ class CheckedCounterexample(CandidateCounterexample):
 
 @dataclass(frozen=True)
 class BoundCheck:
-    """Base type for typed bound-verification outcomes."""
+    """Typed checked outcome, retained as the legacy bound-result name."""
 
     expression: Any
     domain: Any
@@ -77,6 +77,9 @@ class BoundCheck:
     upper: Optional[Fraction]
     checks: tuple[BoundCheckEvidence, ...]
     provenance: BridgeProvenance
+    original_claim: Any | None = field(default=None, kw_only=True)
+    normalized_claim: Any | None = field(default=None, kw_only=True)
+    claim_id: Any | None = field(default=None, kw_only=True)
 
     @property
     def is_verified(self) -> bool:
@@ -120,6 +123,11 @@ class DomainObstruction(BoundCheck):
     """The checker could not establish the operation's domain preconditions."""
 
     reason: str
+
+
+# Public semantic name for the unified API. The alias preserves isinstance
+# compatibility for callers already using BoundCheck.
+ProofResult = BoundCheck
 
 
 @dataclass

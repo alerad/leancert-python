@@ -38,7 +38,7 @@ jobs:
         run: pip install -e '.[dev]'
 
       - name: Run bridge-independent safety and contract tests
-        run: pytest -q leancert/tests/test_bound_outcomes.py leancert/tests/test_client_contract.py leancert/tests/test_protocol_v2.py leancert/tests/test_result.py leancert/tests/test_rational.py
+        run: pytest -q leancert/tests/test_bound_outcomes.py leancert/tests/test_client_contract.py leancert/tests/test_protocol_v2.py leancert/tests/test_unified_prove.py leancert/tests/test_result.py leancert/tests/test_rational.py
 
   build-wheels:
     strategy:
@@ -201,14 +201,20 @@ jobs:
         run: |
           python -c "
           import leancert as lc
-          x = lc.var('x')
-          checked = lc.verify_bound(x**2, {'x': (0, 1)}, upper=1)
+          from leancert import ast
+          x = ast.var('x')
+          checked = lc.prove(x**2 <= 1, where={x: (0, 1)})
           assert isinstance(checked, lc.Verified)
-          assert checked.provenance.bridge_api_version.split('.')[0] in {'1', '2'}
+          assert checked.provenance.bridge_api_version == '2.0.0'
+          assert checked.provenance.protocol_version == '2.0.0'
           assert checked.provenance.lean_version
-          overlap = lc.verify_bound(x - x, {'x': (0, 1)}, upper=-1)
+          assert checked.provenance.build_profile == 'release'
+          assert checked.provenance.source_digest.startswith('sha256:')
+          assert checked.provenance.environment_digest.startswith('sha256:')
+          overlap = lc.prove(x - x <= -1, where={x: (0, 1)})
           assert isinstance(overlap, lc.Inconclusive)
-          result = lc.find_bounds(x**2, {'x': (0, 1)})
+          legacy_x = lc.var('x')
+          result = lc.find_bounds(legacy_x**2, {'x': (0, 1)})
           print(f'min: {result.min_bound}')
           print(f'max: {result.max_bound}')
           assert float(result.min_bound.lo) >= 0
