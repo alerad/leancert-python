@@ -57,9 +57,8 @@ Documentation = "https://leancert.readthedocs.io"
 Repository = "https://github.com/alerad/leancert-python"
 Issues = "https://github.com/alerad/leancert-python/issues"
 
-[tool.setuptools]
-packages = ["leancert"]
-include-package-data = true
+[tool.setuptools.packages.find]
+include = ["leancert*"]
 
 [tool.setuptools.package-data]
 leancert = ["bin/*"]

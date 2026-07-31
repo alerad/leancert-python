@@ -23,6 +23,7 @@ Key Features:
 """
 
 from ._version import __version__
+from . import ast
 
 # Core expression types and constructors
 from .expr import (
