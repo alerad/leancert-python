@@ -1,5 +1,11 @@
 # LeanCert
 
+> **v1 overhaul licensing:** Work on the `v1-overhaul` development line is
+> provisionally all-rights-reserved while final community and commercial terms
+> are prepared. Python SDK versions through the baseline tagged
+> `v0.3.2-apache-final` remain Apache-2.0. LeanCert Core and LeanCert Bridge
+> remain separately available under Apache-2.0. See [LICENSE](LICENSE).
+
 Formal verification for numerical Python code, powered by Lean4.
 
 Write Python, get mathematical proofs. LeanCert proves properties about your code for *all* inputs, not just test samples.
@@ -105,4 +111,12 @@ certificate route is released and pinned.
 
 ## License
 
-Apache 2.0
+The v1 Python SDK overhaul is currently covered by a provisional
+all-rights-reserved notice. No license is presently granted for post-baseline
+v1 code. Do not use or redistribute that development code without written
+permission.
+
+Python SDK material through commit `716cb2d`, preserved by the tag
+`v0.3.2-apache-final`, remains available under Apache-2.0. LeanCert Core,
+LeanCert Bridge, and third-party components retain their separate licenses.
+See [LICENSE](LICENSE) and [LICENSES/Apache-2.0.txt](LICENSES/Apache-2.0.txt).
