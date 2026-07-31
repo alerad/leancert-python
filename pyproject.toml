@@ -4,10 +4,11 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "leancert"
-version = "0.3.2"
+version = "1.0.0.dev0"
 description = "Formal verification for numerical Python code - powered by Lean4"
 readme = "README.md"
-license = "Apache-2.0"
+license = "LicenseRef-LeanCert-Provisional"
+license-files = ["LICENSE", "LICENSES/*", "THIRD_PARTY_NOTICES.md"]
 authors = [
     {name = "LeanCert Contributors"}
 ]
