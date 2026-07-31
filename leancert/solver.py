@@ -410,6 +410,12 @@ class Solver:
             result=result,
         )
 
+    def prove(self, claim, *, where=None, config=None) -> BoundCheck:
+        """Check a semantic AST claim using this solver's bridge connection."""
+        from .proving import prove
+
+        return prove(claim, where=where, config=config, client=self._ensure_client())
+
     @staticmethod
     def _bridge_provenance(client: Any) -> BridgeProvenance:
         try:
@@ -1851,6 +1857,11 @@ def verify_bound(
         :class:`Unsupported`, :class:`DomainObstruction`, or
         :class:`Inconclusive`.
     """
+    warnings.warn(
+        "verify_bound is a legacy expression API; prefer prove(claim, where=...)",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     return _get_solver().verify_bound(expr, domain, upper, lower, config, method)
 
 

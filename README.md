@@ -26,29 +26,32 @@ The v1 overhaul also includes a bridge-independent, exact semantic model under
 conversion boundary are documented in [Semantic AST v1](docs/semantic-ast.md).
 The typed line-protocol negotiation and checked-response invariants are
 documented in [Python protocol model v2](docs/protocol-v2.md).
+The semantic claim front door is documented in
+[Unified checked proving](docs/prove.md).
 
 ## Quick Start
 
 ```python
 import leancert as lc
+from leancert import ast
 
-# Define a symbolic expression
-x = lc.var('x')
-expr = x**2 + lc.sin(x)
+# Define an exact semantic claim
+x = ast.var("x")
+claim = ast.sin(x) <= 1
 
-# Check a bound for ALL x in [-2, 2]
-result = lc.verify_bound(expr, {'x': (-2, 2)}, lower=-0.25)
+# Check it for every x in the closed interval [0, 1]
+result = lc.prove(claim, where={x: (0, 1)})
 if isinstance(result, lc.Verified):
-    print("The checked interval route verified the bound.")
-elif isinstance(result, lc.Rejected):
-    print("A checked point enclosure disproved the bound.")
+    print(f"Verified claim {result.claim_id}")
+    print(result.provenance)
 else:
-    print("The available enclosure was inconclusive.")
+    print(type(result).__name__, result.reason)
 
-# Find rigorous bounds
-result = lc.find_bounds(expr, {'x': (-2, 2)})
-print(f"min in [{result.min_lo}, {result.min_hi}]")
-print(f"max in [{result.max_lo}, {result.max_hi}]")
+# Two-sided claims use an explicit conjunction.
+two_sided = lc.prove(
+    ast.all_of(x >= 0, x <= 1),
+    where={x: (0, 1)},
+)
 ```
 
 ## Neural Network Verification
@@ -85,7 +88,7 @@ print(verified)  # True - proven for every possible input!
 
 ## Key Features
 
-- **Interval Arithmetic**: Rigorous bounds using machine-verified Lean4 kernel
+- **Checked Bounds**: Typed LeanCert checker outcomes with exact provenance
 - **Neural Networks**: Verify ReLU networks, transformers
 - **Root Finding**: Locate and isolate roots with guaranteed correctness
 - **Integration**: Compute integral bounds
@@ -99,7 +102,11 @@ print(verified)  # True - proven for every possible input!
 
 Traditional testing samples inputs: `f(0.5)`, `f(1.0)`, etc. You can never test `f(0.7)` and the infinitely many values in between.
 
-LeanCert uses interval arithmetic to prove properties for *all* inputs simultaneously. The heavy lifting happens in Lean4's kernel, which has a small, trusted core verified to be mathematically sound.
+LeanCert uses interval arithmetic to check properties for all inputs
+simultaneously. Every `Verified` result identifies the checker, Golden Theorem,
+verification route, numerical backend, and exact bridge build that accepted the
+certificate. Independently rebuildable Lean projects are a separate export
+milestone rather than an implicit claim of this runtime API.
 
 `Verified`, `Rejected`, `Unsupported`, `DomainObstruction`, and `Inconclusive`
 are distinct outcomes. An enclosure that is too wide produces `Inconclusive`;

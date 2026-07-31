@@ -23,7 +23,7 @@ Key Features:
 """
 
 from ._version import __version__
-from . import ast
+from . import ast as ast
 
 # Core expression types and constructors
 from .expr import (
@@ -80,6 +80,7 @@ from .result import (
     VerifyResult,
     LipschitzResult,
     BoundCheck,
+    ProofResult,
     BoundCheckEvidence,
     BridgeProvenance,
     CandidateCounterexample,
@@ -129,6 +130,9 @@ from .solver import (
     forward_interval,
     verify_nn_bounds,
 )
+
+# Unified semantic-claim proving API
+from .proving import ProveConfig, prove
 
 # Client (for advanced users)
 from .client import LeanClient
@@ -187,6 +191,7 @@ from .validation import (
 __all__ = [
     # Version
     "__version__",
+    "ast",
     # Expression types
     "Expr",
     "Variable",
@@ -236,6 +241,7 @@ __all__ = [
     "UniqueRootResult",
     "VerifyResult",
     "BoundCheck",
+    "ProofResult",
     "BoundCheckEvidence",
     "BridgeProvenance",
     "CandidateCounterexample",
@@ -257,6 +263,8 @@ __all__ = [
     "find_bounds",
     "verify_bound",
     "verify_bound_or_raise",
+    "ProveConfig",
+    "prove",
     "find_roots",
     "find_unique_root",
     "integrate",
