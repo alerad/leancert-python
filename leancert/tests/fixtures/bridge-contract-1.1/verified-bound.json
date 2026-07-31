@@ -1,0 +1,18 @@
+{
+  "backend": "rational_global_optimization",
+  "certificate": {
+    "checker": "LeanCert.checkGlobalUpperBound",
+    "schema_version": "bound-check/1",
+    "verification_route": "compiled_checker",
+    "verifier": "LeanCert.verify_global_upper_bound"
+  },
+  "computed_hi": {"d": 1, "n": 1},
+  "computed_lo": {"d": 1, "n": 0},
+  "direction": "upper",
+  "enclosure": {
+    "hi": {"d": 1, "n": 1},
+    "lo": {"d": 1, "n": 0}
+  },
+  "status": "verified",
+  "verified": true
+}

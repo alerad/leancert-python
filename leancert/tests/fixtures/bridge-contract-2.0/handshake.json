@@ -1,0 +1,30 @@
+{
+  "bridge_api_version": "2.0.0",
+  "protocol_version": "2.0.0",
+  "protocol_name": "leancert-line-json",
+  "framing": "ndjson",
+  "bridge_version": "0.3.0",
+  "lean_version": "4.31.0",
+  "leancert_version": "4.31.0",
+  "build": {
+    "source_revision": "0123456789abcdef",
+    "source_digest": "sha256:source",
+    "environment_digest": "sha256:environment",
+    "profile": "release"
+  },
+  "operations": ["ping", "get_info", "check_bound"],
+  "expression_nodes": ["const", "var", "add"],
+  "certificate_schemas": ["bound-check/1"],
+  "verification_routes": ["compiled_checker"],
+  "capabilities": {
+    "check_bound": {
+      "schema_version": "2.0",
+      "request_schema": "check-bound-request/1",
+      "result_schema": "bound-outcome/1",
+      "outcomes": ["verified", "inconclusive", "unsupported", "domain_obstruction"],
+      "backends": ["rational_global_optimization"],
+      "certificate_schemas": ["bound-check/1"],
+      "verification_routes": ["compiled_checker"]
+    }
+  }
+}

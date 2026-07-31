@@ -22,12 +22,18 @@ from .domain import Interval
 
 @dataclass(frozen=True)
 class BridgeProvenance:
-    """Version information reported by the bridge that performed a check."""
+    """Exact negotiated environment that performed a checked operation."""
 
-    bridge_api_version: Optional[str] = None
-    bridge_version: Optional[str] = None
-    lean_version: Optional[str] = None
-    leancert_version: Optional[str] = None
+    bridge_api_version: str | None = None
+    protocol_version: str | None = None
+    bridge_version: str | None = None
+    lean_version: str | None = None
+    leancert_version: str | None = None
+    source_revision: str | None = None
+    source_digest: str | None = None
+    environment_digest: str | None = None
+    build_profile: str | None = None
+    capability_digest: str | None = None
 
 
 @dataclass(frozen=True)

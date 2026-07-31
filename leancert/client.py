@@ -17,10 +17,11 @@ import subprocess
 import threading
 from fractions import Fraction
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from .domain import Interval
-from .exceptions import BridgeError
+from .exceptions import BridgeError, BridgeRemoteError, ProtocolViolation
+from .protocol import BoundOperationOutcome, BridgeHandshake
 
 
 class LeanClient:
@@ -38,7 +39,7 @@ class LeanClient:
             result = client.call('ping', {})
     """
 
-    def __init__(self, binary_path: Optional[str] = None):
+    def __init__(self, binary_path: str | None = None):
         """
         Initialize the client.
 
@@ -47,13 +48,14 @@ class LeanClient:
                         for it in standard locations.
         """
         self.binary_path = self._find_binary(binary_path)
-        self._process: Optional[subprocess.Popen] = None
+        self._process: subprocess.Popen | None = None
         self._request_id = 0
         self._contract_checked = False
-        self._bridge_info: Optional[dict[str, Any]] = None
+        self._bridge_info: dict[str, Any] | None = None
+        self._bridge_contract: BridgeHandshake | None = None
         self._io_lock = threading.RLock()
 
-    def _find_binary(self, binary_path: Optional[str]) -> str:
+    def _find_binary(self, binary_path: str | None) -> str:
         """Find the lean_bridge binary."""
         if binary_path and os.path.isfile(binary_path):
             return binary_path
@@ -63,6 +65,7 @@ class LeanClient:
             return env_binary
 
         import sys
+
         module_dir = Path(__file__).parent
 
         # Platform-specific binary name
@@ -106,6 +109,7 @@ class LeanClient:
         if self._process is None or self._process.poll() is not None:
             self._contract_checked = False
             self._bridge_info = None
+            self._bridge_contract = None
             self._process = subprocess.Popen(
                 [self.binary_path],
                 stdin=subprocess.PIPE,
@@ -122,19 +126,9 @@ class LeanClient:
             return
 
         info = self._call_raw("get_info", {})
-        api_version = info.get("bridge_api_version") if isinstance(info, dict) else None
-
-        if not isinstance(api_version, str):
-            raise BridgeError("Bridge get_info response missing bridge_api_version")
-
-        major_str = api_version.split(".", 1)[0]
-        if major_str != "1":
-            raise BridgeError(
-                f"Unsupported bridge_api_version '{api_version}'. "
-                "This SDK requires major version 1."
-            )
-
-        self._bridge_info = dict(info)
+        contract = BridgeHandshake.parse(info)
+        self._bridge_info = dict(contract.raw)
+        self._bridge_contract = contract
         self._contract_checked = True
 
     def _call_raw(self, method: str, params: dict[str, Any]) -> Any:
@@ -161,7 +155,12 @@ class LeanClient:
         }
 
         # Send request
-        request_json = json.dumps(request)
+        try:
+            request_json = json.dumps(
+                request, allow_nan=False, ensure_ascii=False, separators=(",", ":")
+            )
+        except (TypeError, ValueError) as exc:
+            raise ProtocolViolation(f"Request is not valid JSON data: {exc}") from exc
         assert proc.stdin is not None
         proc.stdin.write(request_json + "\n")
         proc.stdin.flush()
@@ -186,17 +185,34 @@ class LeanClient:
                 f"got {response.get('id')!r}"
             )
 
-        # Check for errors
-        if "error" in response and response["error"] is not None:
-            raise BridgeError(str(response["error"]))
-
-        if "result" not in response:
-            raise BridgeError("Bridge response missing result")
+        has_result = "result" in response
+        has_error = "error" in response
+        if has_result == has_error:
+            raise ProtocolViolation("Bridge response must contain exactly one of result or error")
+        unexpected = set(response) - {"id", "result", "error"}
+        if unexpected:
+            raise ProtocolViolation(
+                "Bridge response contains unexpected envelope fields: "
+                + ", ".join(sorted(unexpected))
+            )
+        if has_error:
+            error = response["error"]
+            if isinstance(error, dict):
+                code = error.get("code")
+                message = error.get("message")
+                if not isinstance(code, str) or not code or not isinstance(message, str):
+                    raise ProtocolViolation(
+                        "Structured bridge error requires non-empty code and string message"
+                    )
+                raise BridgeRemoteError(code, message, error.get("data"))
+            if not isinstance(error, str):
+                raise ProtocolViolation("Bridge error must be a string or structured error object")
+            raise BridgeError(error)
         return response["result"]
 
     def call(self, method: str, params: dict[str, Any]) -> Any:
         """
-        Make a JSON-RPC call to the bridge.
+        Make a call over the bridge's custom line-delimited JSON protocol.
 
         Performs a one-time bridge contract check using `get_info` before
         non-handshake calls.
@@ -204,8 +220,8 @@ class LeanClient:
         with self._io_lock:
             if method not in {"ping", "get_info"} and not self._contract_checked:
                 self._check_bridge_contract()
-            operations = (self._bridge_info or {}).get("operations")
-            if isinstance(operations, list) and method not in operations:
+            contract = self._bridge_contract
+            if contract is not None and not contract.supports(method):
                 raise BridgeError(
                     f"Bridge {self._bridge_info.get('bridge_version', '<unknown>')} "
                     f"does not advertise operation {method!r}"
@@ -219,10 +235,11 @@ class LeanClient:
     def get_info(self) -> dict[str, Any]:
         """Get bridge metadata including API and Lean versions."""
         result = self.call("get_info", {})
-        if not isinstance(result, dict):
-            raise BridgeError("Invalid get_info response from bridge")
-        self._bridge_info = dict(result)
-        return result
+        contract = BridgeHandshake.parse(result)
+        self._bridge_info = dict(contract.raw)
+        self._bridge_contract = contract
+        self._contract_checked = True
+        return dict(contract.raw)
 
     @property
     def bridge_info(self) -> dict[str, Any]:
@@ -231,6 +248,14 @@ class LeanClient:
             return self.get_info()
         return dict(self._bridge_info)
 
+    @property
+    def bridge_contract(self) -> BridgeHandshake:
+        """Return the negotiated, typed bridge contract."""
+        if self._bridge_contract is None:
+            self.get_info()
+        assert self._bridge_contract is not None
+        return self._bridge_contract
+
     def eval_interval(
         self,
         expr_json: dict,
@@ -238,11 +263,14 @@ class LeanClient:
         taylor_depth: int = 10,
     ) -> dict:
         """Evaluate an expression over a box."""
-        return self.call("eval_interval", {
-            "expr": expr_json,
-            "box": box_json,
-            "taylorDepth": taylor_depth,
-        })
+        return self.call(
+            "eval_interval",
+            {
+                "expr": expr_json,
+                "box": box_json,
+                "taylorDepth": taylor_depth,
+            },
+        )
 
     def eval_interval_dyadic(
         self,
@@ -273,15 +301,18 @@ class LeanClient:
               - lo, hi: Rational bounds (for compatibility)
               - dyadic: Dict with lo/hi as Dyadic (mantissa, exponent)
         """
-        return self.call("eval_interval_dyadic", {
-            "expr": expr_json,
-            "box": box_json,
-            "config": {
-                "precision": precision,
-                "taylorDepth": taylor_depth,
-                "roundAfterOps": round_after_ops,
+        return self.call(
+            "eval_interval_dyadic",
+            {
+                "expr": expr_json,
+                "box": box_json,
+                "config": {
+                    "precision": precision,
+                    "taylorDepth": taylor_depth,
+                    "roundAfterOps": round_after_ops,
+                },
             },
-        })
+        )
 
     def eval_interval_affine(
         self,
@@ -309,59 +340,68 @@ class LeanClient:
               - lo, hi: Interval bounds
               - affine: Dict with c0 (central value) and radius
         """
-        return self.call("eval_interval_affine", {
-            "expr": expr_json,
-            "box": box_json,
-            "config": {
-                "taylorDepth": taylor_depth,
-                "maxNoiseSymbols": max_noise_symbols,
+        return self.call(
+            "eval_interval_affine",
+            {
+                "expr": expr_json,
+                "box": box_json,
+                "config": {
+                    "taylorDepth": taylor_depth,
+                    "maxNoiseSymbols": max_noise_symbols,
+                },
             },
-        })
+        )
 
     def global_min(
         self,
         expr_json: dict,
         box_json: list[dict],
         max_iters: int = 1000,
-        tolerance: dict = {'n': 1, 'd': 1000},
+        tolerance: dict | None = None,
         use_monotonicity: bool = True,
         taylor_depth: int = 10,
     ) -> dict:
         """Find global minimum."""
-        return self.call("global_min", {
-            "expr": expr_json,
-            "box": box_json,
-            "maxIters": max_iters,
-            "tolerance": tolerance,
-            "useMonotonicity": use_monotonicity,
-            "taylorDepth": taylor_depth,
-        })
+        return self.call(
+            "global_min",
+            {
+                "expr": expr_json,
+                "box": box_json,
+                "maxIters": max_iters,
+                "tolerance": {"n": 1, "d": 1000} if tolerance is None else tolerance,
+                "useMonotonicity": use_monotonicity,
+                "taylorDepth": taylor_depth,
+            },
+        )
 
     def global_max(
         self,
         expr_json: dict,
         box_json: list[dict],
         max_iters: int = 1000,
-        tolerance: dict = {'n': 1, 'd': 1000},
+        tolerance: dict | None = None,
         use_monotonicity: bool = True,
         taylor_depth: int = 10,
     ) -> dict:
         """Find global maximum."""
-        return self.call("global_max", {
-            "expr": expr_json,
-            "box": box_json,
-            "maxIters": max_iters,
-            "tolerance": tolerance,
-            "useMonotonicity": use_monotonicity,
-            "taylorDepth": taylor_depth,
-        })
+        return self.call(
+            "global_max",
+            {
+                "expr": expr_json,
+                "box": box_json,
+                "maxIters": max_iters,
+                "tolerance": {"n": 1, "d": 1000} if tolerance is None else tolerance,
+                "useMonotonicity": use_monotonicity,
+                "taylorDepth": taylor_depth,
+            },
+        )
 
     def global_min_dyadic(
         self,
         expr_json: dict,
         box_json: list[dict],
         max_iters: int = 1000,
-        tolerance: dict = {'n': 1, 'd': 1000},
+        tolerance: dict | None = None,
         use_monotonicity: bool = True,
         taylor_depth: int = 10,
         precision: int = -53,
@@ -372,22 +412,25 @@ class LeanClient:
         Dyadic arithmetic (n * 2^e) avoids denominator explosion that occurs
         with rational arithmetic on deep expressions.
         """
-        return self.call("global_min_dyadic", {
-            "expr": expr_json,
-            "box": box_json,
-            "maxIters": max_iters,
-            "tolerance": tolerance,
-            "useMonotonicity": use_monotonicity,
-            "taylorDepth": taylor_depth,
-            "precision": precision,
-        })
+        return self.call(
+            "global_min_dyadic",
+            {
+                "expr": expr_json,
+                "box": box_json,
+                "maxIters": max_iters,
+                "tolerance": {"n": 1, "d": 1000} if tolerance is None else tolerance,
+                "useMonotonicity": use_monotonicity,
+                "taylorDepth": taylor_depth,
+                "precision": precision,
+            },
+        )
 
     def global_max_dyadic(
         self,
         expr_json: dict,
         box_json: list[dict],
         max_iters: int = 1000,
-        tolerance: dict = {'n': 1, 'd': 1000},
+        tolerance: dict | None = None,
         use_monotonicity: bool = True,
         taylor_depth: int = 10,
         precision: int = -53,
@@ -398,22 +441,25 @@ class LeanClient:
         Dyadic arithmetic (n * 2^e) avoids denominator explosion that occurs
         with rational arithmetic on deep expressions.
         """
-        return self.call("global_max_dyadic", {
-            "expr": expr_json,
-            "box": box_json,
-            "maxIters": max_iters,
-            "tolerance": tolerance,
-            "useMonotonicity": use_monotonicity,
-            "taylorDepth": taylor_depth,
-            "precision": precision,
-        })
+        return self.call(
+            "global_max_dyadic",
+            {
+                "expr": expr_json,
+                "box": box_json,
+                "maxIters": max_iters,
+                "tolerance": {"n": 1, "d": 1000} if tolerance is None else tolerance,
+                "useMonotonicity": use_monotonicity,
+                "taylorDepth": taylor_depth,
+                "precision": precision,
+            },
+        )
 
     def global_min_affine(
         self,
         expr_json: dict,
         box_json: list[dict],
         max_iters: int = 1000,
-        tolerance: dict = {'n': 1, 'd': 1000},
+        tolerance: dict | None = None,
         use_monotonicity: bool = True,
         taylor_depth: int = 10,
         max_noise_symbols: int = 0,
@@ -426,22 +472,25 @@ class LeanClient:
         - x - x on [-1, 1] with interval gives [-2, 2]
         - x - x on [-1, 1] with affine gives [0, 0] (exact!)
         """
-        return self.call("global_min_affine", {
-            "expr": expr_json,
-            "box": box_json,
-            "maxIters": max_iters,
-            "tolerance": tolerance,
-            "useMonotonicity": use_monotonicity,
-            "taylorDepth": taylor_depth,
-            "maxNoiseSymbols": max_noise_symbols,
-        })
+        return self.call(
+            "global_min_affine",
+            {
+                "expr": expr_json,
+                "box": box_json,
+                "maxIters": max_iters,
+                "tolerance": {"n": 1, "d": 1000} if tolerance is None else tolerance,
+                "useMonotonicity": use_monotonicity,
+                "taylorDepth": taylor_depth,
+                "maxNoiseSymbols": max_noise_symbols,
+            },
+        )
 
     def global_max_affine(
         self,
         expr_json: dict,
         box_json: list[dict],
         max_iters: int = 1000,
-        tolerance: dict = {'n': 1, 'd': 1000},
+        tolerance: dict | None = None,
         use_monotonicity: bool = True,
         taylor_depth: int = 10,
         max_noise_symbols: int = 0,
@@ -452,15 +501,18 @@ class LeanClient:
         Affine arithmetic tracks correlations between variables, solving the
         "dependency problem" in interval arithmetic.
         """
-        return self.call("global_max_affine", {
-            "expr": expr_json,
-            "box": box_json,
-            "maxIters": max_iters,
-            "tolerance": tolerance,
-            "useMonotonicity": use_monotonicity,
-            "taylorDepth": taylor_depth,
-            "maxNoiseSymbols": max_noise_symbols,
-        })
+        return self.call(
+            "global_max_affine",
+            {
+                "expr": expr_json,
+                "box": box_json,
+                "maxIters": max_iters,
+                "tolerance": {"n": 1, "d": 1000} if tolerance is None else tolerance,
+                "useMonotonicity": use_monotonicity,
+                "taylorDepth": taylor_depth,
+                "maxNoiseSymbols": max_noise_symbols,
+            },
+        )
 
     def check_bound(
         self,
@@ -471,27 +523,25 @@ class LeanClient:
         taylor_depth: int = 10,
     ) -> dict:
         """Check if a bound holds."""
-        result = self.call("check_bound", {
-            "expr": expr_json,
-            "box": box_json,
-            "bound": bound,
-            "isUpperBound": is_upper_bound,
-            "taylorDepth": taylor_depth,
-        })
-        if not isinstance(result, dict):
-            raise BridgeError("Invalid check_bound response: expected an object")
-        required = {"verified", "computed_lo", "computed_hi"}
-        missing = required.difference(result)
-        if missing:
-            raise BridgeError(
-                f"Invalid check_bound response: missing {', '.join(sorted(missing))}"
+        result = self.call(
+            "check_bound",
+            {
+                "expr": expr_json,
+                "box": box_json,
+                "bound": bound,
+                "isUpperBound": is_upper_bound,
+                "taylorDepth": taylor_depth,
+            },
+        )
+        contract = self._bridge_contract
+        typed_contract = contract.typed_contract if contract is not None else False
+        direction = "upper" if is_upper_bound else "lower"
+        if contract is None:
+            BoundOperationOutcome.parse(
+                result, typed_contract=typed_contract, expected_direction=direction
             )
-        if not isinstance(result["verified"], bool):
-            raise BridgeError("Invalid check_bound response: verified must be boolean")
-        for field in ("computed_lo", "computed_hi"):
-            value = result[field]
-            if not isinstance(value, dict) or not {"n", "d"}.issubset(value):
-                raise BridgeError(f"Invalid check_bound response: malformed {field}")
+        else:
+            contract.parse_bound_outcome(result, expected_direction=direction)
         return result
 
     def integrate(
@@ -502,29 +552,35 @@ class LeanClient:
         taylor_depth: int = 10,
     ) -> dict:
         """Compute integral bounds."""
-        return self.call("integrate", {
-            "expr": expr_json,
-            "interval": interval_json,
-            "partitions": partitions,
-            "taylorDepth": taylor_depth,
-        })
+        return self.call(
+            "integrate",
+            {
+                "expr": expr_json,
+                "interval": interval_json,
+                "partitions": partitions,
+                "taylorDepth": taylor_depth,
+            },
+        )
 
     def find_roots(
         self,
         expr_json: dict,
         interval_json: dict,
         max_iter: int = 1000,
-        tolerance: dict = {'n': 1, 'd': 1000},
+        tolerance: dict | None = None,
         taylor_depth: int = 10,
     ) -> dict:
         """Find roots using bisection."""
-        return self.call("find_roots", {
-            "expr": expr_json,
-            "interval": interval_json,
-            "maxIter": max_iter,
-            "tolerance": tolerance,
-            "taylorDepth": taylor_depth,
-        })
+        return self.call(
+            "find_roots",
+            {
+                "expr": expr_json,
+                "interval": interval_json,
+                "maxIter": max_iter,
+                "tolerance": {"n": 1, "d": 1000} if tolerance is None else tolerance,
+                "taylorDepth": taylor_depth,
+            },
+        )
 
     def verify_adaptive(
         self,
@@ -533,7 +589,7 @@ class LeanClient:
         bound: dict,
         is_upper_bound: bool,
         max_iters: int = 1000,
-        tolerance: dict = {'n': 1, 'd': 1000},
+        tolerance: dict | None = None,
         taylor_depth: int = 10,
     ) -> dict:
         """
@@ -543,15 +599,18 @@ class LeanClient:
         minimizing c - f (for upper) or f - c (for lower) and checking
         if the minimum is >= 0.
         """
-        return self.call("verify_adaptive", {
-            "expr": expr_json,
-            "box": box_json,
-            "bound": bound,
-            "isUpperBound": is_upper_bound,
-            "maxIters": max_iters,
-            "tolerance": tolerance,
-            "taylorDepth": taylor_depth,
-        })
+        return self.call(
+            "verify_adaptive",
+            {
+                "expr": expr_json,
+                "box": box_json,
+                "bound": bound,
+                "isUpperBound": is_upper_bound,
+                "maxIters": max_iters,
+                "tolerance": {"n": 1, "d": 1000} if tolerance is None else tolerance,
+                "taylorDepth": taylor_depth,
+            },
+        )
 
     def find_unique_root(
         self,
@@ -570,11 +629,14 @@ class LeanClient:
           - reason: str ('newton_contraction', 'no_contraction', 'newton_step_failed')
           - interval: dict with lo/hi (refined interval if Newton succeeded)
         """
-        return self.call("find_unique_root", {
-            "expr": expr_json,
-            "interval": interval_json,
-            "taylorDepth": taylor_depth,
-        })
+        return self.call(
+            "find_unique_root",
+            {
+                "expr": expr_json,
+                "interval": interval_json,
+                "taylorDepth": taylor_depth,
+            },
+        )
 
     def forward_interval(
         self,
@@ -610,11 +672,14 @@ class LeanClient:
             >>> result = client.forward_interval(layers, inputs)
             >>> print(result["output"])
         """
-        return self.call("forward_interval", {
-            "layers": layers_json,
-            "input": input_json,
-            "precision": precision,
-        })
+        return self.call(
+            "forward_interval",
+            {
+                "layers": layers_json,
+                "input": input_json,
+                "precision": precision,
+            },
+        )
 
     def deriv_interval(
         self,
@@ -650,11 +715,14 @@ class LeanClient:
             >>> # gradient of x^2 is 2x, so on [0,1] it's [0, 2]
             >>> print(result["lipschitz_bound"])  # Should be 2
         """
-        return self.call("deriv_interval", {
-            "expr": expr_json,
-            "box": box_json,
-            "taylorDepth": taylor_depth,
-        })
+        return self.call(
+            "deriv_interval",
+            {
+                "expr": expr_json,
+                "box": box_json,
+                "taylorDepth": taylor_depth,
+            },
+        )
 
     def close(self) -> None:
         """Close the subprocess."""
@@ -686,12 +754,12 @@ class LeanClient:
 
 def _parse_rat(data: dict) -> Fraction:
     """Parse a rational from kernel JSON."""
-    return Fraction(data['n'], data['d'])
+    return Fraction(data["n"], data["d"])
 
 
 def _parse_interval(data: dict) -> Interval:
     """Parse an interval from kernel JSON."""
-    return Interval(_parse_rat(data['lo']), _parse_rat(data['hi']))
+    return Interval(_parse_rat(data["lo"]), _parse_rat(data["hi"]))
 
 
 def _parse_dyadic(data: dict) -> Fraction:
@@ -700,14 +768,14 @@ def _parse_dyadic(data: dict) -> Fraction:
 
     Returns a Fraction for exact representation.
     """
-    mantissa = data['mantissa']
-    exponent = data['exponent']
+    mantissa = data["mantissa"]
+    exponent = data["exponent"]
     if exponent >= 0:
-        return Fraction(mantissa * (2 ** exponent), 1)
+        return Fraction(mantissa * (2**exponent), 1)
     else:
         return Fraction(mantissa, 2 ** (-exponent))
 
 
 def _parse_dyadic_interval(data: dict) -> Interval:
     """Parse a Dyadic interval from kernel JSON."""
-    return Interval(_parse_dyadic(data['lo']), _parse_dyadic(data['hi']))
+    return Interval(_parse_dyadic(data["lo"]), _parse_dyadic(data["hi"]))

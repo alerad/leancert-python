@@ -6,7 +6,8 @@ import threading
 import pytest
 
 from leancert.client import LeanClient
-from leancert.exceptions import BridgeError
+from leancert.exceptions import BridgeError, BridgeRemoteError
+from leancert.protocol import BridgeHandshake
 
 
 class FakeProcess:
@@ -30,6 +31,7 @@ def raw_client(responses: str) -> LeanClient:
         "bridge_version": "test",
         "lean_version": "4.31.0",
     }
+    client._bridge_contract = BridgeHandshake.parse(client._bridge_info)
     client._io_lock = threading.RLock()
     return client
 
@@ -41,14 +43,32 @@ def test_response_id_must_match_request():
 
 
 def test_malformed_json_is_protocol_failure():
-    client = raw_client('not-json\n')
+    client = raw_client("not-json\n")
     with pytest.raises(BridgeError, match="malformed JSON"):
         client.ping()
+
+
+def test_response_envelope_has_exactly_one_payload():
+    client = raw_client('{"id":1,"result":"pong","error":null}\n')
+    with pytest.raises(BridgeError, match="exactly one"):
+        client.ping()
+
+
+def test_structured_remote_error_retains_code_and_data():
+    client = raw_client(
+        '{"id":1,"error":{"code":"invalid_params","message":"bad box",'
+        '"data":{"field":"box"}}}\n'
+    )
+    with pytest.raises(BridgeRemoteError) as captured:
+        client.ping()
+    assert captured.value.code == "invalid_params"
+    assert captured.value.data == {"field": "box"}
 
 
 def test_unadvertised_operation_is_rejected_before_write():
     client = raw_client("")
     client._bridge_info["operations"] = ["check_bound"]
+    client._bridge_contract = BridgeHandshake.parse(client._bridge_info)
 
     with pytest.raises(BridgeError, match="does not advertise"):
         client.eval_interval({}, [])
