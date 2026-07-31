@@ -36,6 +36,22 @@ class FakeClient:
         return self.optimize_response
 
 
+class V2FakeClient(FakeClient):
+    bridge_info = {
+        "bridge_api_version": "2.0.0",
+        "protocol_version": "2.0.0",
+        "bridge_version": "0.3.0",
+        "lean_version": "4.31.0",
+        "leancert_version": "4.31.0",
+        "build": {
+            "source_revision": "abc123",
+            "source_digest": "sha256:source",
+            "environment_digest": "sha256:environment",
+            "profile": "release",
+        },
+    }
+
+
 def enclosure(lo, hi, verified):
     return {"verified": verified, "computed_lo": rat(lo), "computed_hi": rat(hi)}
 
@@ -48,6 +64,17 @@ def test_checked_success_is_verified():
 
     assert isinstance(result, Verified)
     assert result.provenance.lean_version == "4.31.0"
+
+
+def test_checked_result_retains_v2_build_provenance():
+    result = Solver(client=V2FakeClient([enclosure(0, 1, True)])).verify_bound(
+        var("x"), {"x": (0, 1)}, upper=1
+    )
+
+    assert result.provenance.protocol_version == "2.0.0"
+    assert result.provenance.source_revision == "abc123"
+    assert result.provenance.environment_digest == "sha256:environment"
+    assert result.provenance.build_profile == "release"
 
 
 def test_checked_overlap_is_inconclusive_not_false():

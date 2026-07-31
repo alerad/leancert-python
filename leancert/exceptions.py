@@ -116,6 +116,15 @@ class ProtocolViolation(BridgeError):
     pass
 
 
+class BridgeRemoteError(BridgeError):
+    """A structured infrastructure error returned by Bridge Contract 2.0."""
+
+    def __init__(self, code: str, message: str, data: Any | None = None):
+        super().__init__(message)
+        self.code = code
+        self.data = data
+
+
 class ExpressionError(LeanCertError):
     """Raised when an unsupported expression is used."""
 

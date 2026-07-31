@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from .domain import Interval
-from .exceptions import BridgeError, ProtocolViolation
+from .exceptions import BridgeError, BridgeRemoteError, ProtocolViolation
 from .protocol import BoundOperationOutcome, BridgeHandshake
 
 
@@ -198,10 +198,13 @@ class LeanClient:
         if has_error:
             error = response["error"]
             if isinstance(error, dict):
+                code = error.get("code")
                 message = error.get("message")
-                if not isinstance(message, str):
-                    raise ProtocolViolation("Structured bridge error is missing a string message")
-                raise BridgeError(message)
+                if not isinstance(code, str) or not code or not isinstance(message, str):
+                    raise ProtocolViolation(
+                        "Structured bridge error requires non-empty code and string message"
+                    )
+                raise BridgeRemoteError(code, message, error.get("data"))
             if not isinstance(error, str):
                 raise ProtocolViolation("Bridge error must be a string or structured error object")
             raise BridgeError(error)
@@ -209,7 +212,7 @@ class LeanClient:
 
     def call(self, method: str, params: dict[str, Any]) -> Any:
         """
-        Make a JSON-RPC call to the bridge.
+        Make a call over the bridge's custom line-delimited JSON protocol.
 
         Performs a one-time bridge contract check using `get_info` before
         non-handshake calls.
@@ -532,11 +535,13 @@ class LeanClient:
         )
         contract = self._bridge_contract
         typed_contract = contract.typed_contract if contract is not None else False
-        BoundOperationOutcome.parse(
-            result,
-            typed_contract=typed_contract,
-            expected_direction="upper" if is_upper_bound else "lower",
-        )
+        direction = "upper" if is_upper_bound else "lower"
+        if contract is None:
+            BoundOperationOutcome.parse(
+                result, typed_contract=typed_contract, expected_direction=direction
+            )
+        else:
+            contract.parse_bound_outcome(result, expected_direction=direction)
         return result
 
     def integrate(

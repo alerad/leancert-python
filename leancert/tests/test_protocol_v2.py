@@ -14,11 +14,11 @@ from leancert.protocol import (
     ProtocolVersion,
 )
 
-FIXTURES = Path(__file__).parent / "fixtures" / "bridge-contract-1.1"
+FIXTURES = Path(__file__).parent / "fixtures"
 
 
-def _fixture(name: str) -> dict:
-    return json.loads((FIXTURES / name).read_text())
+def _fixture(name: str, contract: str = "bridge-contract-2.0") -> dict:
+    return json.loads((FIXTURES / contract / name).read_text())
 
 
 def typed_handshake() -> dict:
@@ -36,7 +36,7 @@ def test_semantic_versions_are_canonical_and_major_checked():
     with pytest.raises(ProtocolViolation, match="canonical"):
         ProtocolVersion.parse("01.1.0")
     handshake = typed_handshake()
-    handshake["bridge_api_version"] = handshake["protocol_version"] = "2.0.0"
+    handshake["bridge_api_version"] = handshake["protocol_version"] = "3.0.0"
     with pytest.raises(ProtocolViolation, match="supports major"):
         BridgeHandshake.parse(handshake)
 
@@ -44,12 +44,25 @@ def test_semantic_versions_are_canonical_and_major_checked():
 def test_typed_handshake_retains_capability_identity():
     handshake = BridgeHandshake.parse(typed_handshake())
     assert handshake.typed_contract
+    assert handshake.protocol_name == "leancert-line-json"
+    assert handshake.framing == "ndjson"
+    assert handshake.build is not None and handshake.build.release_ready
     assert handshake.supports("check_bound")
     assert not handshake.supports("integrate")
     capability = handshake.capability("check_bound")
     assert capability is not None
     assert capability.outcomes == frozenset(OutcomeStatus)
     assert capability.backends == frozenset({"rational_global_optimization"})
+    assert capability.request_schema == "check-bound-request/1"
+    assert capability.result_schema == "bound-outcome/1"
+    assert handshake.capability_digest.startswith("sha256:")
+    assert handshake.capability_digest == BridgeHandshake.parse(typed_handshake()).capability_digest
+
+
+def test_contract_1_1_remains_supported_during_binary_rollout():
+    handshake = BridgeHandshake.parse(_fixture("handshake.json", "bridge-contract-1.1"))
+    assert handshake.api_version == ProtocolVersion(1, 1, 0)
+    assert handshake.build is None
 
 
 def test_legacy_handshake_remains_explicit_compatibility_mode():
@@ -79,6 +92,28 @@ def test_verified_bound_descriptor_is_typed():
     assert outcome.enclosure.upper.fraction == 1
     assert outcome.certificate is not None
     assert outcome.certificate.schema_version == "bound-check/1"
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    [
+        (lambda value: value.update(backend="unadvertised"), "backend was not advertised"),
+        (
+            lambda value: value["certificate"].update(verification_route="native"),
+            "verification route was not advertised",
+        ),
+        (
+            lambda value: value["certificate"].update(schema_version="bound-check/2"),
+            "certificate schema was not advertised",
+        ),
+    ],
+)
+def test_bound_response_must_match_negotiated_capability(mutation, message):
+    handshake = BridgeHandshake.parse(typed_handshake())
+    response = deepcopy(verified_bound())
+    mutation(response)
+    with pytest.raises(ProtocolViolation, match=message):
+        handshake.parse_bound_outcome(response, expected_direction="upper")
 
 
 @pytest.mark.parametrize(

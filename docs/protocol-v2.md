@@ -1,58 +1,47 @@
-# Python protocol model v2
+# LeanCert bridge contract 2.0
 
-PR2 replaces ad-hoc dictionary inspection with an executable model of the
-LeanCert bridge contract. The current interoperable wire version is Bridge
-Contract `1.1.0`; “v2” here names the Python SDK architecture, not JSON-RPC or
-a claim that the bridge wire major version is already `2`.
+The Python SDK and `leancert-bridge` negotiate a typed, capability-driven
+contract before any checked operation is sent. The wire format is a custom
+newline-delimited JSON protocol named `leancert-line-json`; it is not JSON-RPC
+2.0.
 
-## Framing
+## Framing and errors
 
-The bridge consumes one JSON object per input line and emits one JSON object per
-output line. A request contains `id`, `method`, and `params`. A response repeats
-the `id` and contains exactly one of `result` or `error`. This protocol is not
-JSON-RPC 2.0.
-
-Transport failures and malformed envelopes raise `ProtocolViolation` or
-`BridgeError`. Mathematical non-success remains data returned by an operation.
+Each request contains `id`, `method`, and `params`. Each response repeats the
+`id` and contains exactly one of `result` or `error`. Contract 2.0 errors are
+objects with a stable `code`, human-readable `message`, and optional `data`.
+Malformed envelopes and remote infrastructure failures raise exceptions.
+Mathematical non-success is returned as a typed operation outcome.
 
 ## Negotiation
 
-`BridgeHandshake` validates semantic versions and capability identity before an
-operation is sent. Contract `1.1.0` requires:
+The `get_info` handshake identifies:
 
-- bridge, Lean, and LeanCert versions;
+- protocol, bridge, Lean, and LeanCert versions;
+- NDJSON framing and the protocol name;
+- source revision, source digest, environment digest, and build profile;
 - supported operations and expression nodes;
-- certificate schema identities;
-- verification routes;
-- per-operation outcome and backend capabilities.
+- certificate schemas and verification routes;
+- each checked operation's request schema, result schema, outcomes, backends,
+  certificate schemas, and verification routes.
 
-Contract `1.0.0` remains an explicit compatibility mode for the currently
-bundled bridge pin. It does not acquire capabilities that it did not advertise.
-The SDK rejects unknown major versions.
+The client refuses unadvertised operations and rejects responses whose backend,
+certificate schema, or verification route was not negotiated. Contract 1.0 and
+1.1 remain explicit compatibility modes while previously published bundled
+bridge binaries are phased out. Unknown major versions are rejected.
 
 ## Checked bound outcomes
 
-For `check_bound`, the typed response must agree with its retained 1.x legacy
-fields. The client rejects:
+`check_bound` returns one of `verified`, `inconclusive`, `unsupported`, or
+`domain_obstruction`. Only `verified` may carry a certificate. The SDK also
+checks that the typed response agrees with retained legacy enclosure fields,
+uses exact rationals with positive denominators, and matches the request
+direction.
 
-- a `verified` Boolean that contradicts `status`;
-- typed and legacy enclosures that differ;
-- inverted intervals or nonpositive rational denominators;
-- a response direction different from the request;
-- certificates on non-verified outcomes;
-- verified outcomes without a certificate;
-- malformed checker, verifier, schema, or verification-route identities.
+This validation does not prove the bound a second time. It ensures Python does
+not misrepresent the checked result, authority, or provenance reported by the
+bridge.
 
-This validation does not independently prove the bound. It prevents the Python
-SDK from misrepresenting what the bridge said it checked.
-
-## Next server increment
-
-Before changing the Python package pin, `leancert-bridge` should tag the typed
-contract commit and add immutable build/source/environment digests. Additional
-operations should advertise a typed result schema only after they return a
-checked certificate descriptor and the complete retained evidence required by
-that schema.
-
-Golden fixtures live in `leancert/tests/fixtures/bridge-contract-1.1` and are
-intended to be copied into the bridge repository's contract test suite.
+Golden fixtures live under
+`leancert/tests/fixtures/bridge-contract-{1.1,2.0}`. Contract 2.0 fixtures are
+mirrored by the bridge repository's executable contract tests.

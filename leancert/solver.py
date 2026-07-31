@@ -419,11 +419,19 @@ class Solver:
                 info = client.get_info()
             except (AttributeError, TypeError):
                 info = {}
+        build = info.get('build') if isinstance(info.get('build'), dict) else {}
+        contract = getattr(client, "bridge_contract", None)
         return BridgeProvenance(
             bridge_api_version=info.get('bridge_api_version'),
+            protocol_version=info.get('protocol_version'),
             bridge_version=info.get('bridge_version'),
             lean_version=info.get('lean_version'),
             leancert_version=info.get('leancert_version'),
+            source_revision=build.get('source_revision'),
+            source_digest=build.get('source_digest'),
+            environment_digest=build.get('environment_digest'),
+            build_profile=build.get('profile'),
+            capability_digest=(contract.capability_digest if contract is not None else None),
         )
 
     def _verify_bound_checked(

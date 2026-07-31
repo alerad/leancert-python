@@ -6,7 +6,7 @@ import threading
 import pytest
 
 from leancert.client import LeanClient
-from leancert.exceptions import BridgeError
+from leancert.exceptions import BridgeError, BridgeRemoteError
 from leancert.protocol import BridgeHandshake
 
 
@@ -52,6 +52,17 @@ def test_response_envelope_has_exactly_one_payload():
     client = raw_client('{"id":1,"result":"pong","error":null}\n')
     with pytest.raises(BridgeError, match="exactly one"):
         client.ping()
+
+
+def test_structured_remote_error_retains_code_and_data():
+    client = raw_client(
+        '{"id":1,"error":{"code":"invalid_params","message":"bad box",'
+        '"data":{"field":"box"}}}\n'
+    )
+    with pytest.raises(BridgeRemoteError) as captured:
+        client.ping()
+    assert captured.value.code == "invalid_params"
+    assert captured.value.data == {"field": "box"}
 
 
 def test_unadvertised_operation_is_rejected_before_write():

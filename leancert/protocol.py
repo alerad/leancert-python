@@ -7,6 +7,8 @@ owning subprocess transport or mathematical SDK result types.
 
 from __future__ import annotations
 
+import hashlib
+import json
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
@@ -16,7 +18,7 @@ from typing import Any
 
 from .exceptions import ProtocolViolation
 
-SUPPORTED_BRIDGE_API_MAJOR = 1
+SUPPORTED_BRIDGE_API_MAJORS = frozenset({1, 2})
 TYPED_CONTRACT_MINIMUM = (1, 1, 0)
 
 
@@ -79,6 +81,10 @@ class OperationCapability:
     schema_version: str
     outcomes: frozenset[OutcomeStatus]
     backends: frozenset[str]
+    request_schema: str | None = None
+    result_schema: str | None = None
+    certificate_schemas: frozenset[str] = frozenset()
+    verification_routes: frozenset[str] = frozenset()
 
     @classmethod
     def parse(cls, operation: str, value: Any) -> OperationCapability:
@@ -101,7 +107,68 @@ class OperationCapability:
                 f"capabilities.{operation} must advertise verified and at least one backend"
             )
         assert schema is not None
-        return cls(operation, schema, outcomes, backends)
+        request_schema = _string(
+            obj.get("request_schema"),
+            f"capabilities.{operation}.request_schema",
+            optional="request_schema" not in obj,
+        )
+        result_schema = _string(
+            obj.get("result_schema"),
+            f"capabilities.{operation}.result_schema",
+            optional="result_schema" not in obj,
+        )
+        certificate_schemas = _string_set(
+            obj.get("certificate_schemas"),
+            f"capabilities.{operation}.certificate_schemas",
+            required=False,
+        )
+        verification_routes = _string_set(
+            obj.get("verification_routes"),
+            f"capabilities.{operation}.verification_routes",
+            required=False,
+        )
+        return cls(
+            operation,
+            schema,
+            outcomes,
+            backends,
+            request_schema,
+            result_schema,
+            certificate_schemas,
+            verification_routes,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class BuildProvenance:
+    source_revision: str
+    source_digest: str
+    environment_digest: str
+    profile: str
+
+    @classmethod
+    def parse(cls, value: Any) -> BuildProvenance:
+        obj = _object(value, "build")
+        required = {"source_revision", "source_digest", "environment_digest", "profile"}
+        if set(obj) != required:
+            raise ProtocolViolation("build provenance fields do not match Contract 2.0")
+        values = [_string(obj[field], f"build.{field}") for field in sorted(required)]
+        assert all(item is not None for item in values)
+        return cls(
+            source_revision=obj["source_revision"],
+            source_digest=obj["source_digest"],
+            environment_digest=obj["environment_digest"],
+            profile=obj["profile"],
+        )
+
+    @property
+    def release_ready(self) -> bool:
+        return (
+            self.profile == "release"
+            and self.source_revision != "development"
+            and self.source_digest.startswith("sha256:")
+            and self.environment_digest.startswith("sha256:")
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -118,6 +185,9 @@ class BridgeHandshake:
     capabilities: tuple[OperationCapability, ...]
     raw: Mapping[str, Any]
     advertises_operations: bool
+    protocol_name: str | None = None
+    framing: str | None = None
+    build: BuildProvenance | None = None
 
     @property
     def typed_contract(self) -> bool:
@@ -133,20 +203,87 @@ class BridgeHandshake:
     def capability(self, operation: str) -> OperationCapability | None:
         return next((item for item in self.capabilities if item.operation == operation), None)
 
+    @property
+    def capability_digest(self) -> str:
+        """Stable identity for the negotiated semantic capability set."""
+        payload = {
+            "protocol_version": str(self.protocol_version),
+            "operations": sorted(self.operations),
+            "expression_nodes": sorted(self.expression_nodes),
+            "certificate_schemas": sorted(self.certificate_schemas),
+            "verification_routes": sorted(self.verification_routes),
+            "capabilities": [
+                {
+                    "operation": item.operation,
+                    "schema_version": item.schema_version,
+                    "request_schema": item.request_schema,
+                    "result_schema": item.result_schema,
+                    "outcomes": sorted(outcome.value for outcome in item.outcomes),
+                    "backends": sorted(item.backends),
+                    "certificate_schemas": sorted(item.certificate_schemas),
+                    "verification_routes": sorted(item.verification_routes),
+                }
+                for item in self.capabilities
+            ],
+        }
+        encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+        return "sha256:" + hashlib.sha256(encoded).hexdigest()
+
+    def parse_bound_outcome(
+        self, value: Any, *, expected_direction: str
+    ) -> BoundOperationOutcome:
+        outcome = BoundOperationOutcome.parse(
+            value,
+            typed_contract=self.typed_contract,
+            expected_direction=expected_direction,
+        )
+        if not self.typed_contract:
+            return outcome
+        capability = self.capability("check_bound")
+        if capability is None:
+            raise ProtocolViolation("bridge returned a typed bound without check_bound capability")
+        if outcome.status not in capability.outcomes:
+            raise ProtocolViolation("bound status was not advertised by check_bound capability")
+        if outcome.backend not in capability.backends:
+            raise ProtocolViolation("bound backend was not advertised by check_bound capability")
+        if outcome.certificate is not None:
+            if (
+                capability.certificate_schemas
+                and outcome.certificate.schema_version not in capability.certificate_schemas
+            ):
+                raise ProtocolViolation("bound certificate schema was not advertised")
+            if (
+                capability.verification_routes
+                and outcome.certificate.verification_route not in capability.verification_routes
+            ):
+                raise ProtocolViolation("bound verification route was not advertised")
+            if outcome.certificate.schema_version not in self.certificate_schemas:
+                raise ProtocolViolation("bound certificate schema is absent from the handshake")
+            if outcome.certificate.verification_route not in self.verification_routes:
+                raise ProtocolViolation("bound verification route is absent from the handshake")
+        return outcome
+
     @classmethod
     def parse(cls, value: Any) -> BridgeHandshake:
         obj = _object(value, "get_info result")
         api = ProtocolVersion.parse(obj.get("bridge_api_version"))
-        if api.major != SUPPORTED_BRIDGE_API_MAJOR:
+        if api.major not in SUPPORTED_BRIDGE_API_MAJORS:
             raise ProtocolViolation(
                 f"Unsupported bridge_api_version '{api}'; "
-                f"this SDK supports major version {SUPPORTED_BRIDGE_API_MAJOR}"
+                "this SDK supports major versions "
+                + ", ".join(str(item) for item in sorted(SUPPORTED_BRIDGE_API_MAJORS))
             )
         typed = (api.major, api.minor, api.patch) >= TYPED_CONTRACT_MINIMUM
         protocol_value = obj.get("protocol_version", str(api))
         protocol = ProtocolVersion.parse(protocol_value, "protocol_version")
         if protocol != api:
             raise ProtocolViolation("protocol_version and bridge_api_version must agree")
+        protocol_name = _string(
+            obj.get("protocol_name"), "protocol_name", optional=api.major < 2
+        )
+        framing = _string(obj.get("framing"), "framing", optional=api.major < 2)
+        if api.major >= 2 and (protocol_name != "leancert-line-json" or framing != "ndjson"):
+            raise ProtocolViolation("Contract 2.0 requires leancert-line-json over ndjson")
         bridge_version = _string(obj.get("bridge_version"), "bridge_version")
         lean_version = _string(obj.get("lean_version"), "lean_version")
         leancert_version = _string(
@@ -169,6 +306,7 @@ class BridgeHandshake:
             raise ProtocolViolation(
                 "typed bridges must advertise expression nodes, certificate schemas, and routes"
             )
+        build = None if api.major < 2 else BuildProvenance.parse(obj.get("build"))
         raw_capabilities = obj.get("capabilities")
         if raw_capabilities is None and not typed:
             capability_items: tuple[OperationCapability, ...] = ()
@@ -184,6 +322,20 @@ class BridgeHandshake:
                     "capabilities describe unadvertised operations: "
                     + ", ".join(sorted(unadvertised))
                 )
+            if api.major >= 2:
+                incomplete = [
+                    item.operation
+                    for item in capability_items
+                    if not item.request_schema
+                    or not item.result_schema
+                    or not item.certificate_schemas
+                    or not item.verification_routes
+                ]
+                if incomplete:
+                    raise ProtocolViolation(
+                        "Contract 2.0 checked capabilities lack schema or route identity: "
+                        + ", ".join(incomplete)
+                    )
         assert bridge_version is not None and lean_version is not None
         return cls(
             api,
@@ -198,6 +350,9 @@ class BridgeHandshake:
             capability_items,
             MappingProxyType(dict(obj)),
             advertises_operations,
+            protocol_name,
+            framing,
+            build,
         )
 
 
