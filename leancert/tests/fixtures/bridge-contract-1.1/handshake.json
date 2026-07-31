@@ -1,0 +1,18 @@
+{
+  "bridge_api_version": "1.1.0",
+  "bridge_version": "bridge-v4.31.1",
+  "capabilities": {
+    "check_bound": {
+      "backends": ["rational_global_optimization"],
+      "outcomes": ["verified", "inconclusive", "unsupported", "domain_obstruction"],
+      "schema_version": "1.1"
+    }
+  },
+  "certificate_schemas": ["bound-check/1"],
+  "expression_nodes": ["const", "var", "add"],
+  "lean_version": "4.31.0",
+  "leancert_version": "4.31.0",
+  "operations": ["ping", "get_info", "check_bound"],
+  "protocol_version": "1.1.0",
+  "verification_routes": ["compiled_checker"]
+}

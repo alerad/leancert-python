@@ -24,6 +24,8 @@ pinned in `bridge-version.txt`.
 The v1 overhaul also includes a bridge-independent, exact semantic model under
 `leancert.ast`. Its versioned encoding, binder rules, claim closure, and legacy
 conversion boundary are documented in [Semantic AST v1](docs/semantic-ast.md).
+The typed line-protocol negotiation and checked-response invariants are
+documented in [Python protocol model v2](docs/protocol-v2.md).
 
 ## Quick Start
 
