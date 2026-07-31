@@ -9,6 +9,7 @@ This module provides the main user-facing interface for verification.
 
 from __future__ import annotations
 from fractions import Fraction
+import warnings
 from typing import Optional, Union, Any
 
 from .expr import Expr
@@ -19,17 +20,16 @@ from .result import (
     BoundsResult, RootsResult, RootInterval, IntegralResult, Certificate,
     UniqueRootResult, WitnessPoint, MinWitnessResult, MaxWitnessResult,
     RootWitnessResult, FailureDiagnosis, LipschitzResult,
+    BoundCheck, BoundCheckEvidence, BridgeProvenance, CandidateCounterexample,
+    CheckedCounterexample, Verified, Rejected, Inconclusive, Unsupported,
+    DomainObstruction,
 )
 from .adaptive import AdaptiveResult, AdaptiveConfig, verify_bound_adaptive as _verify_bound_adaptive
-from .exceptions import VerificationFailed, DomainError
+from .exceptions import VerificationFailed, VerificationInconclusive, DomainError
+from ._version import __version__
 from .rational import to_fraction
 from .simplify import simplify as _simplify_expr
 from .expr import has_dependency as _has_dependency
-
-
-# Version info
-__version__ = "0.3.0"
-LEAN_VERSION = "4.28.0"  # Updated when bridge is rebuilt
 
 
 class Solver:
@@ -329,7 +329,7 @@ class Solver:
                 'backend': config.backend.value,
             },
             verified=True,
-            lean_version=LEAN_VERSION,
+            lean_version=self._bridge_provenance(client).lean_version or "unknown",
             leancert_version=__version__,
         )
 
@@ -346,154 +346,163 @@ class Solver:
         domain: Union[Interval, Box, tuple, dict],
         upper: Optional[float] = None,
         lower: Optional[float] = None,
-        config: Config = Config(),
-        method: str = 'adaptive',  # Changed default to adaptive
-    ) -> bool:
-        """
-        Verify that expression satisfies given bounds with False Positive Filtering.
+        config: Optional[Config] = None,
+        method: str = 'checked',
+    ) -> BoundCheck:
+        """Check bounds without conflating failure to prove with falsity.
 
-        Pipeline:
-        1. Symbolic Simplification (handles dependency problem)
-        2. Global Optimization (Branch & Bound)
-        3. Counterexample Concretization (filters false positives)
-
-        Args:
-            expr: Expression to verify.
-            domain: Domain specification.
-            upper: Upper bound to verify (expr <= upper).
-            lower: Lower bound to verify (expr >= lower).
-            config: Solver configuration.
-            method: Verification method - 'adaptive' (default, uses optimization
-                   with false positive filtering) or 'interval' (fast, conservative).
-
-        Returns:
-            True if verified.
-
-        Raises:
-            VerificationFailed: If bound verification fails AND is confirmed by
-                               concrete evaluation (not a false positive).
-            ValueError: If method is invalid or no bounds specified.
+        ``checked`` is the conservative bridge-backed route. ``interval`` is a
+        deprecated alias. ``adaptive`` may discover a checked counterexample,
+        but cannot return :class:`Verified` with the current bridge contract.
         """
         if upper is None and lower is None:
             raise ValueError("Must specify at least one of upper or lower bound")
 
-        if method not in ('interval', 'adaptive'):
-            raise ValueError(f"Unknown method: {method}. Use 'interval' or 'adaptive'.")
-
-        # Keep original expression for concrete evaluation
-        original_expr = expr
+        if method == 'interval':
+            warnings.warn(
+                "method='interval' is deprecated; use method='checked'",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            method = 'checked'
+        if method not in ('checked', 'adaptive'):
+            raise ValueError(f"Unknown method: {method}. Use 'checked' or 'adaptive'.")
 
         client = self._ensure_client()
         expr_json, box = self._prepare_request(expr, domain)
         box_json = box.to_kernel_list()
+        config = config or Config()
         cfg = config.to_kernel()
 
         if method == 'adaptive':
-            return self._verify_bound_adaptive_with_concretization(
-                client, original_expr, expr_json, box, box_json, cfg, upper, lower
+            return self._discover_bound_counterexample(
+                client, expr, expr_json, box, box_json, cfg, upper, lower
             )
-        else:
-            return self._verify_bound_interval(
-                client, expr_json, box_json, cfg, upper, lower
-            )
+        return self._verify_bound_checked(
+            client, expr, expr_json, box, box_json, cfg, upper, lower
+        )
 
-    def _verify_bound_interval(
+    def verify_bound_or_raise(
+        self,
+        expr: Expr,
+        domain: Union[Interval, Box, tuple, dict],
+        upper: Optional[float] = None,
+        lower: Optional[float] = None,
+        config: Optional[Config] = None,
+        method: str = 'checked',
+    ) -> bool:
+        """Deprecated Boolean/exception compatibility API."""
+        warnings.warn(
+            "verify_bound_or_raise is a compatibility API; prefer typed verify_bound outcomes",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        result = self.verify_bound(expr, domain, upper, lower, config, method)
+        if isinstance(result, Verified):
+            return True
+        if isinstance(result, Rejected):
+            raise VerificationFailed(
+                "A checked point enclosure rejects the requested bound",
+                computed_bound=result.counterexample.enclosure,
+            )
+        raise VerificationInconclusive(
+            "The available checked enclosure was insufficient to decide the bound",
+            result=result,
+        )
+
+    @staticmethod
+    def _bridge_provenance(client: Any) -> BridgeProvenance:
+        try:
+            info = client.bridge_info
+        except (AttributeError, TypeError):
+            try:
+                info = client.get_info()
+            except (AttributeError, TypeError):
+                info = {}
+        return BridgeProvenance(
+            bridge_api_version=info.get('bridge_api_version'),
+            bridge_version=info.get('bridge_version'),
+            lean_version=info.get('lean_version'),
+            leancert_version=info.get('leancert_version'),
+        )
+
+    def _verify_bound_checked(
         self,
         client,
+        expr: Expr,
         expr_json: dict,
+        box: Box,
         box_json: list,
         cfg: dict,
         upper: Optional[float],
         lower: Optional[float],
-    ) -> bool:
-        """Verify bounds using simple interval evaluation."""
-        if upper is not None:
-            bound_frac = to_fraction(upper)
-            bound_json = {'n': bound_frac.numerator, 'd': bound_frac.denominator}
-
-            result = client.check_bound(
-                expr_json, box_json, bound_json,
-                is_upper_bound=True,
+    ) -> BoundCheck:
+        """Use only the bridge's conservative ``check_bound`` operation."""
+        checks: list[BoundCheckEvidence] = []
+        requested = (("lower", lower), ("upper", upper))
+        for direction, value in requested:
+            if value is None:
+                continue
+            bound = to_fraction(value)
+            response = client.check_bound(
+                expr_json,
+                box_json,
+                {'n': bound.numerator, 'd': bound.denominator},
+                is_upper_bound=direction == "upper",
                 taylor_depth=cfg['taylorDepth'],
             )
-
-            if not result['verified']:
-                computed = _parse_rat(result['computed_hi'])
-                raise VerificationFailed(
-                    f"Failed to verify upper bound {upper}. Computed max: {float(computed):.6f}",
-                    computed_bound=computed,
-                )
-
-        if lower is not None:
-            bound_frac = to_fraction(lower)
-            bound_json = {'n': bound_frac.numerator, 'd': bound_frac.denominator}
-
-            result = client.check_bound(
-                expr_json, box_json, bound_json,
-                is_upper_bound=False,
-                taylor_depth=cfg['taylorDepth'],
+            enclosure_json = response.get('enclosure') or {
+                'lo': response['computed_lo'], 'hi': response['computed_hi']
+            }
+            enclosure = Interval(
+                _parse_rat(enclosure_json['lo']), _parse_rat(enclosure_json['hi'])
             )
-
-            if not result['verified']:
-                computed = _parse_rat(result['computed_lo'])
-                raise VerificationFailed(
-                    f"Failed to verify lower bound {lower}. Computed min: {float(computed):.6f}",
-                    computed_bound=computed,
-                )
-
-        return True
-
-    def _verify_bound_adaptive(
-        self,
-        client,
-        expr_json: dict,
-        box_json: list,
-        cfg: dict,
-        upper: Optional[float],
-        lower: Optional[float],
-    ) -> bool:
-        """Verify bounds using adaptive optimization."""
-        if upper is not None:
-            bound_frac = to_fraction(upper)
-            bound_json = {'n': bound_frac.numerator, 'd': bound_frac.denominator}
-
-            result = client.verify_adaptive(
-                expr_json, box_json, bound_json,
-                is_upper_bound=True,
-                max_iters=cfg['maxIters'],
-                tolerance=cfg['tolerance'],
+            status = response.get('status')
+            if status is None:
+                status = "verified" if response['verified'] else "inconclusive"
+            allowed_statuses = {
+                "verified", "inconclusive", "unsupported", "domain_obstruction"
+            }
+            if status not in allowed_statuses:
+                raise ValueError(f"invalid check_bound status from bridge: {status!r}")
+            checks.append(BoundCheckEvidence(
+                direction=direction,
+                requested_bound=bound,
+                enclosure=enclosure,
+                status=status,
+                operation="check_bound",
+                backend=response.get('backend', "rational"),
                 taylor_depth=cfg['taylorDepth'],
+                certificate=response.get('certificate'),
+                raw_response=dict(response),
+            ))
+
+        common = dict(
+            expression=expr,
+            domain=box,
+            lower=None if lower is None else to_fraction(lower),
+            upper=None if upper is None else to_fraction(upper),
+            checks=tuple(checks),
+            provenance=self._bridge_provenance(client),
+        )
+        if all(check.status == "verified" for check in checks):
+            return Verified(**common)
+        if any(check.status == "domain_obstruction" for check in checks):
+            return DomainObstruction(
+                **common,
+                reason="The checked evaluator could not establish domain validity.",
             )
-
-            if not result['verified']:
-                min_value = _parse_rat(result['minValue'])
-                raise VerificationFailed(
-                    f"Failed to verify upper bound {upper}. Gap: {float(min_value):.6f}",
-                    computed_bound=to_fraction(upper) - min_value,
-                )
-
-        if lower is not None:
-            bound_frac = to_fraction(lower)
-            bound_json = {'n': bound_frac.numerator, 'd': bound_frac.denominator}
-
-            result = client.verify_adaptive(
-                expr_json, box_json, bound_json,
-                is_upper_bound=False,
-                max_iters=cfg['maxIters'],
-                tolerance=cfg['tolerance'],
-                taylor_depth=cfg['taylorDepth'],
+        if any(check.status == "unsupported" for check in checks):
+            return Unsupported(
+                **common,
+                reason="The bridge's checked bound route does not support this expression.",
             )
+        return Inconclusive(
+            **common,
+            reason="The checked interval enclosure was insufficient for the requested bound.",
+        )
 
-            if not result['verified']:
-                min_value = _parse_rat(result['minValue'])
-                raise VerificationFailed(
-                    f"Failed to verify lower bound {lower}. Gap: {float(min_value):.6f}",
-                    computed_bound=to_fraction(lower) + min_value,
-                )
-
-        return True
-
-    def _verify_bound_adaptive_with_concretization(
+    def _discover_bound_counterexample(
         self,
         client,
         original_expr: Expr,
@@ -503,117 +512,78 @@ class Solver:
         cfg: dict,
         upper: Optional[float],
         lower: Optional[float],
-    ) -> bool:
-        """
-        Verify bounds using optimization with false positive filtering.
-
-        This method uses global optimization to find the min/max, then
-        concretizes the result by evaluating the original expression
-        at the reported extremum point. If the concrete evaluation
-        doesn't violate the bound, it's a false positive caused by
-        interval over-approximation.
-        """
+    ) -> BoundCheck:
+        """Use adaptive search only to discover a rigorously checked point."""
         var_names = box.var_order()
+        checks: list[BoundCheckEvidence] = []
+        candidate: Optional[CandidateCounterexample] = None
+        rejected: Optional[CheckedCounterexample] = None
 
-        def _concretize_and_check(
-            best_box: list,
-            limit: float,
-            is_upper: bool,
-        ) -> bool:
-            """
-            Check if violation is real by evaluating at the midpoint.
-
-            Returns True if the violation is REAL (not a false positive).
-            Returns False if it's a false positive (concrete value is OK).
-            """
-            try:
-                if not best_box:
-                    # No location data, can't filter - assume real
-                    return True
-
-                # Construct environment from bestBox midpoints
-                env = {}
-                for i, interval_json in enumerate(best_box):
-                    if i >= len(var_names):
-                        break
-                    name = var_names[i]
-                    lo = _parse_rat(interval_json['lo'])
-                    hi = _parse_rat(interval_json['hi'])
-                    midpoint = (lo + hi) / 2
-                    env[name] = float(midpoint)
-
-                # Concrete evaluation using Python math
-                concrete_val = original_expr.evaluate(env)
-
-                # Check against limit
-                if is_upper:
-                    # Claimed violation: max(f) > upper
-                    # Real if concrete_val > limit
-                    return float(concrete_val) > limit
-                else:
-                    # Claimed violation: min(f) < lower
-                    # Real if concrete_val < limit
-                    return float(concrete_val) < limit
-
-            except Exception:
-                # If concretization fails, assume real to be safe
-                return True
-
-        # --- LOWER BOUND CHECK (f(x) >= lower) ---
-        if lower is not None:
-            # Find minimum of f
-            min_result = client.global_min(
+        for direction, value in (("lower", lower), ("upper", upper)):
+            if value is None:
+                continue
+            optimizer = client.global_min if direction == "lower" else client.global_max
+            response = optimizer(
                 expr_json, box_json,
-                max_iters=cfg['maxIters'],
-                tolerance=cfg['tolerance'],
+                max_iters=cfg['maxIters'], tolerance=cfg['tolerance'],
                 use_monotonicity=cfg['useMonotonicity'],
                 taylor_depth=cfg['taylorDepth'],
             )
+            enclosure = Interval(_parse_rat(response['lo']), _parse_rat(response['hi']))
+            bound = to_fraction(value)
+            checks.append(BoundCheckEvidence(
+                direction=direction, requested_bound=bound, enclosure=enclosure,
+                status="inconclusive", operation=f"global_{'min' if direction == 'lower' else 'max'}",
+                backend="rational", taylor_depth=cfg['taylorDepth'],
+                raw_response=dict(response),
+            ))
 
-            computed_min_lo = _parse_rat(min_result.get('lo', {'n': 0, 'd': 1}))
-            limit = to_fraction(lower)
-
-            if computed_min_lo < limit:
-                # Solver claims violation. Check with concretization.
-                best_box = min_result.get('bestBox', [])
-
-                if _concretize_and_check(best_box, float(lower), is_upper=False):
-                    # Real violation confirmed
-                    raise VerificationFailed(
-                        f"Lower bound verification failed. "
-                        f"Min value: {float(computed_min_lo):.6f} < {lower}",
-                        computed_bound=computed_min_lo,
-                    )
-                # Else: False positive, continue (bound is actually OK)
-
-        # --- UPPER BOUND CHECK (f(x) <= upper) ---
-        if upper is not None:
-            # Find maximum of f
-            max_result = client.global_max(
-                expr_json, box_json,
-                max_iters=cfg['maxIters'],
-                tolerance=cfg['tolerance'],
-                use_monotonicity=cfg['useMonotonicity'],
+            best_box = response.get('bestBox', [])
+            if not best_box or len(best_box) < len(var_names):
+                continue
+            point = {
+                name: (_parse_rat(best_box[i]['lo']) + _parse_rat(best_box[i]['hi'])) / 2
+                for i, name in enumerate(var_names)
+            }
+            point_box = [Interval.point(point[name]).to_kernel() for name in var_names]
+            point_response = client.check_bound(
+                expr_json, point_box,
+                {'n': bound.numerator, 'd': bound.denominator},
+                is_upper_bound=direction == "lower",
                 taylor_depth=cfg['taylorDepth'],
             )
+            point_enclosure = Interval(
+                _parse_rat(point_response['computed_lo']),
+                _parse_rat(point_response['computed_hi']),
+            )
+            candidate = CandidateCounterexample(point, point_enclosure)
+            violates = (
+                point_enclosure.hi < bound if direction == "lower"
+                else point_enclosure.lo > bound
+            )
+            if violates:
+                rejected = CheckedCounterexample(point, point_enclosure)
+                checks[-1] = BoundCheckEvidence(
+                    direction=direction, requested_bound=bound, enclosure=enclosure,
+                    status="rejected", operation=checks[-1].operation,
+                    backend="rational", taylor_depth=cfg['taylorDepth'],
+                    raw_response=dict(response),
+                )
+                break
 
-            computed_max_hi = _parse_rat(max_result.get('hi', {'n': 0, 'd': 1}))
-            limit = to_fraction(upper)
-
-            if computed_max_hi > limit:
-                # Solver claims violation. Check with concretization.
-                best_box = max_result.get('bestBox', [])
-
-                if _concretize_and_check(best_box, float(upper), is_upper=True):
-                    # Real violation confirmed
-                    raise VerificationFailed(
-                        f"Upper bound verification failed. "
-                        f"Max value: {float(computed_max_hi):.6f} > {upper}",
-                        computed_bound=computed_max_hi,
-                    )
-                # Else: False positive, continue
-
-        return True
+        common = dict(
+            expression=original_expr, domain=box,
+            lower=None if lower is None else to_fraction(lower),
+            upper=None if upper is None else to_fraction(upper),
+            checks=tuple(checks), provenance=self._bridge_provenance(client),
+        )
+        if rejected is not None:
+            return Rejected(**common, counterexample=rejected)
+        return Inconclusive(
+            **common,
+            reason="Adaptive search is discovery-only until its certificate route is checked.",
+            candidate_counterexample=candidate,
+        )
 
     def find_roots(
         self,
@@ -889,7 +859,7 @@ class Solver:
                 'backend': strategy,
             },
             verified=True,
-            lean_version=LEAN_VERSION,
+            lean_version=self._bridge_provenance(client).lean_version or "unknown",
             leancert_version=__version__,
         )
 
@@ -968,7 +938,7 @@ class Solver:
                 'backend': strategy,
             },
             verified=True,
-            lean_version=LEAN_VERSION,
+            lean_version=self._bridge_provenance(client).lean_version or "unknown",
             leancert_version=__version__,
         )
 
@@ -1051,7 +1021,7 @@ class Solver:
                     'proof_method': 'newton_contraction',
                 },
                 verified=True,
-                lean_version=LEAN_VERSION,
+                lean_version=self._bridge_provenance(client).lean_version or "unknown",
                 leancert_version=__version__,
             )
 
@@ -1106,7 +1076,7 @@ class Solver:
                 'proof_method': 'sign_change',
             },
             verified=True,
-            lean_version=LEAN_VERSION,
+            lean_version=self._bridge_provenance(client).lean_version or "unknown",
             leancert_version=__version__,
         )
 
@@ -1483,7 +1453,7 @@ class Solver:
                 'gradient_bounds': {k: v.to_kernel() for k, v in gradient_bounds.items()},
             },
             verified=True,
-            lean_version=LEAN_VERSION,
+            lean_version=self._bridge_provenance(client).lean_version or "unknown",
             leancert_version=__version__,
         )
 
@@ -1855,13 +1825,10 @@ def verify_bound(
     domain: Union[Interval, Box, tuple, dict],
     upper: Optional[float] = None,
     lower: Optional[float] = None,
-    config: Config = Config(),
-    method: str = 'adaptive',
-) -> bool:
-    """Verify that an expression satisfies bounds with false positive filtering.
-
-    This function uses global optimization with counterexample concretization
-    to filter false positives caused by interval over-approximation.
+    config: Optional[Config] = None,
+    method: str = 'checked',
+) -> BoundCheck:
+    """Return a typed, conservative outcome for a bound claim.
 
     Args:
         expr: Expression to verify.
@@ -1869,17 +1836,26 @@ def verify_bound(
         upper: Upper bound to verify (expr <= upper).
         lower: Lower bound to verify (expr >= lower).
         config: Solver configuration.
-        method: 'adaptive' (default, uses optimization with false positive
-               filtering) or 'interval' (fast, conservative).
+        method: ``checked`` (default) or discovery-only ``adaptive``.
 
     Returns:
-        True if verified.
-
-    Raises:
-        VerificationFailed: If bound verification fails AND is confirmed by
-                           concrete evaluation (not a false positive).
+        A typed :class:`BoundCheck` outcome such as :class:`Verified`,
+        :class:`Unsupported`, :class:`DomainObstruction`, or
+        :class:`Inconclusive`.
     """
     return _get_solver().verify_bound(expr, domain, upper, lower, config, method)
+
+
+def verify_bound_or_raise(
+    expr: Expr,
+    domain: Union[Interval, Box, tuple, dict],
+    upper: Optional[float] = None,
+    lower: Optional[float] = None,
+    config: Optional[Config] = None,
+    method: str = 'checked',
+) -> bool:
+    """Deprecated Boolean/exception compatibility wrapper around ``verify_bound``."""
+    return _get_solver().verify_bound_or_raise(expr, domain, upper, lower, config, method)
 
 
 def find_roots(

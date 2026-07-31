@@ -24,9 +24,14 @@ import leancert as lc
 x = lc.var('x')
 expr = x**2 + lc.sin(x)
 
-# Verify a bound holds for ALL x in [-2, 2]
-verified = lc.verify_bound(expr, {'x': (-2, 2)}, lower=-0.25)
-print(verified)  # True - mathematically proven!
+# Check a bound for ALL x in [-2, 2]
+result = lc.verify_bound(expr, {'x': (-2, 2)}, lower=-0.25)
+if isinstance(result, lc.Verified):
+    print("The checked interval route verified the bound.")
+elif isinstance(result, lc.Rejected):
+    print("A checked point enclosure disproved the bound.")
+else:
+    print("The available enclosure was inconclusive.")
 
 # Find rigorous bounds
 result = lc.find_bounds(expr, {'x': (-2, 2)})
@@ -83,6 +88,12 @@ print(verified)  # True - proven for every possible input!
 Traditional testing samples inputs: `f(0.5)`, `f(1.0)`, etc. You can never test `f(0.7)` and the infinitely many values in between.
 
 LeanCert uses interval arithmetic to prove properties for *all* inputs simultaneously. The heavy lifting happens in Lean4's kernel, which has a small, trusted core verified to be mathematically sound.
+
+`Verified`, `Rejected`, `Unsupported`, `DomainObstruction`, and `Inconclusive`
+are distinct outcomes. An enclosure that is too wide produces `Inconclusive`;
+failure to find a counterexample is never reported as proof. Adaptive
+optimization remains discovery-only in this SDK until its typed bridge
+certificate route is released and pinned.
 
 ## Links
 

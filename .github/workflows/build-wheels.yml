@@ -23,6 +23,23 @@ env:
   BRIDGE_REPO: alerad/leancert-bridge
 
 jobs:
+  safety-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install test dependencies
+        run: pip install -e '.[dev]'
+
+      - name: Run bridge-independent safety and contract tests
+        run: pytest -q leancert/tests/test_bound_outcomes.py leancert/tests/test_client_contract.py leancert/tests/test_result.py leancert/tests/test_rational.py
+
   build-wheels:
     strategy:
       fail-fast: false
@@ -185,6 +202,12 @@ jobs:
           python -c "
           import leancert as lc
           x = lc.var('x')
+          checked = lc.verify_bound(x**2, {'x': (0, 1)}, upper=1)
+          assert isinstance(checked, lc.Verified)
+          assert checked.provenance.bridge_api_version.split('.')[0] == '1'
+          assert checked.provenance.lean_version
+          overlap = lc.verify_bound(x - x, {'x': (0, 1)}, upper=-1)
+          assert isinstance(overlap, lc.Inconclusive)
           result = lc.find_bounds(x**2, {'x': (0, 1)})
           print(f'min: {result.min_bound}')
           print(f'max: {result.max_bound}')

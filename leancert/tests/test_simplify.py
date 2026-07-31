@@ -150,7 +150,8 @@ class TestSolverIntegration:
 
         # This should now work (was failing before)
         result = solver.verify_bound(pnl_diff, domain, lower=0)
-        assert result is True
+        from leancert import Verified
+        assert isinstance(result, Verified)
 
     def test_pnl_bounds_with_simplify(self):
         """Test that find_bounds gives correct results with simplification."""

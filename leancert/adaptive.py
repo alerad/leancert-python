@@ -36,7 +36,8 @@ if TYPE_CHECKING:
 
 from .domain import Interval, Box, normalize_domain
 from .config import Config
-from .result import Certificate, FailureDiagnosis
+from .result import Certificate, FailureDiagnosis, Verified
+from ._version import __version__
 from .rational import to_fraction
 
 
@@ -1150,7 +1151,13 @@ class CEGARVerifier:
             box,
         )
 
-        # Create certificate
+        try:
+            lean_version = self.solver._ensure_client().bridge_info.get("lean_version", "unknown")
+        except (AttributeError, TypeError):
+            lean_version = "unknown"
+
+        # This legacy artifact records checked leaf responses; it is not a
+        # standalone replayable certificate.
         cert = Certificate(
             operation='verify_adaptive',
             expr_json=expr.compile(box.var_order()),
@@ -1164,8 +1171,9 @@ class CEGARVerifier:
                 'total_time_ms': total_time,
             },
             verified=all_verified,
-            lean_version="4.24.0",
-            leancert_version="0.3.0",
+            lean_version=lean_version,
+            leancert_version=__version__,
+            metadata={"artifact_kind": "legacy_checked-leaf-record"},
         )
 
         return AdaptiveResult(
@@ -1425,13 +1433,22 @@ class CEGARVerifier:
                 )
 
             # Try verification
-            self.solver.verify_bound(
+            outcome = self.solver.verify_bound(
                 expr,
                 subdomain.box,
                 upper=upper,
                 lower=lower,
                 config=self.solver_config,
             )
+
+            if not isinstance(outcome, Verified):
+                elapsed = (time.time() - start) * 1000
+                return SubdomainResult(
+                    subdomain=subdomain,
+                    verified=False,
+                    verification_time_ms=elapsed,
+                    gradient_info=gradient_info,
+                )
 
             elapsed = (time.time() - start) * 1000
             return SubdomainResult(

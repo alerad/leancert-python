@@ -82,17 +82,14 @@ class TestVerifyBoundAPI:
         x = lf.var('x')
         result = lf.verify_bound(x**2, {'x': (0, 1)}, upper=1.0)
 
-        assert result is True
+        assert isinstance(result, lf.Verified)
 
     def test_verify_upper_bound_fails(self):
         """x**2 <= 0.5 on [0, 1] should fail."""
         import leancert as lf
-        from leancert.exceptions import VerificationFailed
-
         x = lf.var('x')
-
-        with pytest.raises(VerificationFailed):
-            lf.verify_bound(x**2, {'x': (0, 1)}, upper=0.5)
+        result = lf.verify_bound(x**2, {'x': (0, 1)}, upper=0.5)
+        assert isinstance(result, lf.Inconclusive)
 
     def test_verify_lower_bound_passes(self):
         """x**2 >= 0 on [0, 1] should verify."""
@@ -101,17 +98,14 @@ class TestVerifyBoundAPI:
         x = lf.var('x')
         result = lf.verify_bound(x**2, {'x': (0, 1)}, lower=0.0)
 
-        assert result is True
+        assert isinstance(result, lf.Verified)
 
     def test_verify_lower_bound_fails(self):
         """x**2 >= 0.5 on [0, 1] should fail."""
         import leancert as lf
-        from leancert.exceptions import VerificationFailed
-
         x = lf.var('x')
-
-        with pytest.raises(VerificationFailed):
-            lf.verify_bound(x**2, {'x': (0, 1)}, lower=0.5)
+        result = lf.verify_bound(x**2, {'x': (0, 1)}, lower=0.5)
+        assert isinstance(result, lf.Inconclusive)
 
     def test_verify_both_bounds(self):
         """Verify both upper and lower."""
@@ -120,7 +114,7 @@ class TestVerifyBoundAPI:
         x = lf.var('x')
         result = lf.verify_bound(x**2, {'x': (0, 1)}, lower=0.0, upper=1.0)
 
-        assert result is True
+        assert isinstance(result, lf.Verified)
 
 
 class TestFindRootsAPI:
@@ -251,7 +245,7 @@ class TestAdaptiveVerification:
         x = lf.var('x')
         # x**2 <= 1.5 on [0, 1] should verify
         result = lf.verify_bound(x**2, {'x': (0, 1)}, upper=1.5, method='adaptive')
-        assert result is True
+        assert isinstance(result, lf.Inconclusive)
 
     def test_verify_adaptive_tight_bound_passes(self):
         """Adaptive verification can verify tight bounds better than interval eval."""
@@ -260,7 +254,7 @@ class TestAdaptiveVerification:
         x = lf.var('x')
         # x**2 <= 1.01 on [0, 1] should verify with optimization
         result = lf.verify_bound(x**2, {'x': (0, 1)}, upper=1.01, method='adaptive')
-        assert result is True
+        assert isinstance(result, lf.Inconclusive)
 
     def test_verify_adaptive_lower_bound_passes(self):
         """Adaptive verification works for lower bounds."""
@@ -269,26 +263,24 @@ class TestAdaptiveVerification:
         x = lf.var('x')
         # x**2 >= -0.1 on [0, 1] should verify
         result = lf.verify_bound(x**2, {'x': (0, 1)}, lower=-0.1, method='adaptive')
-        assert result is True
+        assert isinstance(result, lf.Inconclusive)
 
     def test_verify_adaptive_fails_when_wrong(self):
         """Adaptive verification fails for invalid bounds."""
         import leancert as lf
-        from leancert.exceptions import VerificationFailed
-
         x = lf.var('x')
         # x**2 <= 0.5 on [0, 1] should fail (max is 1)
-        with pytest.raises(VerificationFailed):
-            lf.verify_bound(x**2, {'x': (0, 1)}, upper=0.5, method='adaptive')
+        result = lf.verify_bound(x**2, {'x': (0, 1)}, upper=0.5, method='adaptive')
+        assert isinstance(result, (lf.Rejected, lf.Inconclusive))
 
-    def test_verify_default_method_is_interval(self):
-        """Default method is 'interval' (faster but less powerful)."""
+    def test_verify_default_method_is_checked(self):
+        """Default method is the conservative checked route."""
         import leancert as lf
 
         x = lf.var('x')
-        # This should use interval method by default
+        # This should use the checked method by default
         result = lf.verify_bound(x**2, {'x': (0, 1)}, upper=1.0)
-        assert result is True
+        assert isinstance(result, lf.Verified)
 
 
 class TestUniqueRootFinding:

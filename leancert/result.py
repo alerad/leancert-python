@@ -9,14 +9,111 @@ and exportable certificates.
 """
 
 from __future__ import annotations
+
+import hashlib
+import json
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from fractions import Fraction
-from typing import Optional, Any
-import json
-import hashlib
-from pathlib import Path
+from typing import Any, Literal, Optional
 
 from .domain import Interval
+
+
+@dataclass(frozen=True)
+class BridgeProvenance:
+    """Version information reported by the bridge that performed a check."""
+
+    bridge_api_version: Optional[str] = None
+    bridge_version: Optional[str] = None
+    lean_version: Optional[str] = None
+    leancert_version: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class BoundCheckEvidence:
+    """Retained evidence from one lower- or upper-bound bridge operation."""
+
+    direction: Literal["lower", "upper"]
+    requested_bound: Fraction
+    enclosure: Interval
+    status: Literal[
+        "verified", "inconclusive", "rejected", "unsupported",
+        "domain_obstruction",
+    ]
+    operation: str
+    backend: Optional[str]
+    taylor_depth: int
+    certificate: Optional[Mapping[str, Any]] = None
+    raw_response: Mapping[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class CandidateCounterexample:
+    """A search-produced point that has not itself established falsity."""
+
+    values: Mapping[str, Fraction]
+    enclosure: Optional[Interval] = None
+
+
+@dataclass(frozen=True)
+class CheckedCounterexample(CandidateCounterexample):
+    """A point enclosure lying wholly on the violating side of a bound."""
+
+
+@dataclass(frozen=True)
+class BoundCheck:
+    """Base type for typed bound-verification outcomes."""
+
+    expression: Any
+    domain: Any
+    lower: Optional[Fraction]
+    upper: Optional[Fraction]
+    checks: tuple[BoundCheckEvidence, ...]
+    provenance: BridgeProvenance
+
+    @property
+    def is_verified(self) -> bool:
+        return isinstance(self, Verified)
+
+    def __bool__(self) -> bool:
+        raise TypeError(
+            "Bound-check outcomes have no truth value; use isinstance(result, Verified)"
+        )
+
+
+@dataclass(frozen=True)
+class Verified(BoundCheck):
+    """Every requested bound was accepted by the checked bridge route."""
+
+
+@dataclass(frozen=True)
+class Rejected(BoundCheck):
+    """A checked point enclosure proves that a requested bound is false."""
+
+    counterexample: CheckedCounterexample
+
+
+@dataclass(frozen=True)
+class Inconclusive(BoundCheck):
+    """Available enclosures were insufficient to decide the requested bound."""
+
+    reason: str
+    candidate_counterexample: Optional[CandidateCounterexample] = None
+
+
+@dataclass(frozen=True)
+class Unsupported(BoundCheck):
+    """The selected checked route does not support the expression or request."""
+
+    reason: str
+
+
+@dataclass(frozen=True)
+class DomainObstruction(BoundCheck):
+    """The checker could not establish the operation's domain preconditions."""
+
+    reason: str
 
 
 @dataclass

@@ -4,21 +4,23 @@
 """
 Low-level client for communication with the Lean kernel.
 
-This module handles subprocess management and JSON-RPC protocol.
+This module handles subprocess management and the line-delimited JSON protocol.
 It should not be used directly by end users - use the Solver class instead.
 """
 
 from __future__ import annotations
+
 import json
 import os
-import subprocess
 import shutil
-from pathlib import Path
-from typing import Optional, Any
+import subprocess
+import threading
 from fractions import Fraction
+from pathlib import Path
+from typing import Any, Optional
 
+from .domain import Interval
 from .exceptions import BridgeError
-from .domain import Interval, Box
 
 
 class LeanClient:
@@ -26,7 +28,7 @@ class LeanClient:
     Low-level client for the Lean math kernel.
 
     Uses a subprocess to communicate with the compiled lean_bridge executable
-    via JSON-RPC over stdin/stdout.
+    via a versioned line-delimited JSON protocol over stdin/stdout.
 
     This class manages the subprocess lifecycle and should be used as a
     context manager to ensure proper cleanup.
@@ -48,6 +50,8 @@ class LeanClient:
         self._process: Optional[subprocess.Popen] = None
         self._request_id = 0
         self._contract_checked = False
+        self._bridge_info: Optional[dict[str, Any]] = None
+        self._io_lock = threading.RLock()
 
     def _find_binary(self, binary_path: Optional[str]) -> str:
         """Find the lean_bridge binary."""
@@ -101,6 +105,7 @@ class LeanClient:
         """Ensure the subprocess is running."""
         if self._process is None or self._process.poll() is not None:
             self._contract_checked = False
+            self._bridge_info = None
             self._process = subprocess.Popen(
                 [self.binary_path],
                 stdin=subprocess.PIPE,
@@ -129,11 +134,12 @@ class LeanClient:
                 "This SDK requires major version 1."
             )
 
+        self._bridge_info = dict(info)
         self._contract_checked = True
 
     def _call_raw(self, method: str, params: dict[str, Any]) -> Any:
         """
-        Send a raw JSON-RPC request without compatibility pre-checks.
+        Send a raw line-delimited JSON request without compatibility pre-checks.
 
         Args:
             method: The RPC method name.
@@ -167,13 +173,26 @@ class LeanClient:
             stderr = proc.stderr.read() if proc.stderr else ""
             raise BridgeError(f"Bridge process died. stderr: {stderr}")
 
-        response = json.loads(response_line)
+        try:
+            response = json.loads(response_line)
+        except json.JSONDecodeError as exc:
+            raise BridgeError(f"Bridge returned malformed JSON: {exc}") from exc
+
+        if not isinstance(response, dict):
+            raise BridgeError("Bridge response must be a JSON object")
+        if response.get("id") != self._request_id:
+            raise BridgeError(
+                f"Bridge response id mismatch: expected {self._request_id}, "
+                f"got {response.get('id')!r}"
+            )
 
         # Check for errors
         if "error" in response and response["error"] is not None:
             raise BridgeError(str(response["error"]))
 
-        return response.get("result")
+        if "result" not in response:
+            raise BridgeError("Bridge response missing result")
+        return response["result"]
 
     def call(self, method: str, params: dict[str, Any]) -> Any:
         """
@@ -182,9 +201,16 @@ class LeanClient:
         Performs a one-time bridge contract check using `get_info` before
         non-handshake calls.
         """
-        if method not in {"ping", "get_info"} and not self._contract_checked:
-            self._check_bridge_contract()
-        return self._call_raw(method, params)
+        with self._io_lock:
+            if method not in {"ping", "get_info"} and not self._contract_checked:
+                self._check_bridge_contract()
+            operations = (self._bridge_info or {}).get("operations")
+            if isinstance(operations, list) and method not in operations:
+                raise BridgeError(
+                    f"Bridge {self._bridge_info.get('bridge_version', '<unknown>')} "
+                    f"does not advertise operation {method!r}"
+                )
+            return self._call_raw(method, params)
 
     def ping(self) -> str:
         """Test connection to the bridge."""
@@ -195,7 +221,15 @@ class LeanClient:
         result = self.call("get_info", {})
         if not isinstance(result, dict):
             raise BridgeError("Invalid get_info response from bridge")
+        self._bridge_info = dict(result)
         return result
+
+    @property
+    def bridge_info(self) -> dict[str, Any]:
+        """Return cached handshake data, performing the handshake if needed."""
+        if self._bridge_info is None:
+            return self.get_info()
+        return dict(self._bridge_info)
 
     def eval_interval(
         self,
@@ -437,13 +471,28 @@ class LeanClient:
         taylor_depth: int = 10,
     ) -> dict:
         """Check if a bound holds."""
-        return self.call("check_bound", {
+        result = self.call("check_bound", {
             "expr": expr_json,
             "box": box_json,
             "bound": bound,
             "isUpperBound": is_upper_bound,
             "taylorDepth": taylor_depth,
         })
+        if not isinstance(result, dict):
+            raise BridgeError("Invalid check_bound response: expected an object")
+        required = {"verified", "computed_lo", "computed_hi"}
+        missing = required.difference(result)
+        if missing:
+            raise BridgeError(
+                f"Invalid check_bound response: missing {', '.join(sorted(missing))}"
+            )
+        if not isinstance(result["verified"], bool):
+            raise BridgeError("Invalid check_bound response: verified must be boolean")
+        for field in ("computed_lo", "computed_hi"):
+            value = result[field]
+            if not isinstance(value, dict) or not {"n", "d"}.issubset(value):
+                raise BridgeError(f"Invalid check_bound response: malformed {field}")
+        return result
 
     def integrate(
         self,
@@ -609,14 +658,22 @@ class LeanClient:
 
     def close(self) -> None:
         """Close the subprocess."""
-        if self._process is not None:
-            try:
-                self._process.terminate()
-                self._process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                self._process.kill()
-            finally:
-                self._process = None
+        with self._io_lock:
+            if self._process is not None:
+                process = self._process
+                try:
+                    process.terminate()
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait()
+                finally:
+                    for stream in (process.stdin, process.stdout, process.stderr):
+                        if stream is not None:
+                            stream.close()
+                    self._process = None
+                    self._bridge_info = None
+                    self._contract_checked = False
 
     def __enter__(self) -> LeanClient:
         """Context manager entry."""

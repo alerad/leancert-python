@@ -10,7 +10,7 @@ Run CI workflow `Build Wheels` manually or open a PR.
 
 ## 3. Publish package
 
-Create and push a tag like `v0.3.1`.
+Create and push a tag matching the version in `pyproject.toml` (for example `v0.3.2`).
 
 The publish job builds wheels, verifies a smoke test, and uploads to PyPI.
 

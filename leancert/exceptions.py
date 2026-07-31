@@ -57,6 +57,14 @@ class VerificationFailed(LeanCertError):
         self.counterexample_box = counterexample_box
 
 
+class VerificationInconclusive(LeanCertError):
+    """Raised only by compatibility APIs when a check cannot decide a claim."""
+
+    def __init__(self, message: str, result: Optional[Any] = None):
+        super().__init__(message)
+        self.result = result
+
+
 class VerificationTimeout(LeanCertError):
     """Raised when verification times out."""
 

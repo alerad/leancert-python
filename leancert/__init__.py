@@ -22,7 +22,7 @@ Key Features:
     - Context manager support for resource management
 """
 
-__version__ = "0.3.0"
+from ._version import __version__
 
 # Core expression types and constructors
 from .expr import (
@@ -78,6 +78,16 @@ from .result import (
     UniqueRootResult,
     VerifyResult,
     LipschitzResult,
+    BoundCheck,
+    BoundCheckEvidence,
+    BridgeProvenance,
+    CandidateCounterexample,
+    CheckedCounterexample,
+    Verified,
+    Rejected,
+    Inconclusive,
+    Unsupported,
+    DomainObstruction,
 )
 
 # Adaptive verification (CEGAR)
@@ -110,6 +120,7 @@ from .solver import (
     Solver,
     find_bounds,
     verify_bound,
+    verify_bound_or_raise,
     find_roots,
     find_unique_root,
     integrate,
@@ -130,6 +141,7 @@ from .exceptions import (
     CompilationError,
     DomainError,
     VerificationFailed,
+    VerificationInconclusive,
     VerificationTimeout,
     BridgeError,
     ExpressionError,
@@ -222,6 +234,16 @@ __all__ = [
     "Certificate",
     "UniqueRootResult",
     "VerifyResult",
+    "BoundCheck",
+    "BoundCheckEvidence",
+    "BridgeProvenance",
+    "CandidateCounterexample",
+    "CheckedCounterexample",
+    "Verified",
+    "Rejected",
+    "Inconclusive",
+    "Unsupported",
+    "DomainObstruction",
     # Adaptive verification (CEGAR)
     "AdaptiveResult",
     "AdaptiveConfig",
@@ -233,6 +255,7 @@ __all__ = [
     "Solver",
     "find_bounds",
     "verify_bound",
+    "verify_bound_or_raise",
     "find_roots",
     "find_unique_root",
     "integrate",
@@ -249,6 +272,7 @@ __all__ = [
     "CompilationError",
     "DomainError",
     "VerificationFailed",
+    "VerificationInconclusive",
     "VerificationTimeout",
     "BridgeError",
     "ExpressionError",

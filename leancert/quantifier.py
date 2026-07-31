@@ -39,7 +39,7 @@ if TYPE_CHECKING:
 
 from .domain import Interval, Box, normalize_domain
 from .config import Config
-from .result import Certificate
+from .result import Certificate, Verified
 from .rational import to_fraction
 
 
@@ -211,9 +211,15 @@ class QuantifierSynthesizer:
             else:
                 verify_expr = expr
 
-            self.solver.verify_bound(
+            bound_check = self.solver.verify_bound(
                 verify_expr, domain, upper=delta, config=self.config
             )
+            if not isinstance(bound_check, Verified):
+                return QuantifierResult(
+                    pattern=QuantifierPattern.EXISTS_FORALL_BOUND,
+                    success=False,
+                    message="The proposed witness bound was not verified by the checked route.",
+                )
 
             witness = Witness(
                 value=delta,
