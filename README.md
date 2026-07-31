@@ -21,6 +21,10 @@ That's it! The package includes pre-built binaries - no Lean installation requir
 Bridge binaries are sourced from the decoupled `leancert-bridge` release tag
 pinned in `bridge-version.txt`.
 
+The v1 overhaul also includes a bridge-independent, exact semantic model under
+`leancert.ast`. Its versioned encoding, binder rules, claim closure, and legacy
+conversion boundary are documented in [Semantic AST v1](docs/semantic-ast.md).
+
 ## Quick Start
 
 ```python
