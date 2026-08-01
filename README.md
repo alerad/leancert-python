@@ -128,8 +128,11 @@ certificate route is released and pinned.
 
 The v1 Python SDK overhaul is currently covered by a provisional
 all-rights-reserved notice. No license is presently granted for post-baseline
-v1 code. Do not use or redistribute that development code without written
-permission.
+v1 code. Commercial internal use, network-service deployment, AI training or
+evaluation, and using generated artifacts to train or synthesize
+machine-learning data are expressly prohibited. Do not use or redistribute
+that development code without written permission. See [LICENSE](LICENSE) for
+the controlling terms.
 
 Python SDK material through commit `716cb2d`, preserved by the tag
 `v0.3.2-apache-final`, remains available under Apache-2.0. LeanCert Core,
