@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import warnings
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from fractions import Fraction
@@ -34,6 +35,72 @@ class BridgeProvenance:
     environment_digest: str | None = None
     build_profile: str | None = None
     capability_digest: str | None = None
+    lean_toolchain: str | None = None
+    leancert_source: str | None = None
+    leancert_input_revision: str | None = None
+    leancert_resolved_revision: str | None = None
+
+
+@dataclass(frozen=True)
+class ReplayBoundConfig:
+    max_iterations: int
+    tolerance: Fraction
+    use_monotonicity: bool
+    taylor_depth: int
+
+
+@dataclass(frozen=True)
+class ReplayableBoundCertificate:
+    """Canonical fixed checker input issued by Bridge Contract 2.1."""
+
+    schema_version: str
+    payload_schema: str
+    checker: str
+    verifier: str
+    verification_route: str
+    payload_digest: str
+    expression: Mapping[str, Any]
+    box: tuple[Interval, ...]
+    bound: Fraction
+    direction: Literal["lower", "upper"]
+    config: ReplayBoundConfig
+    canonical_payload: Mapping[str, Any]
+
+
+@dataclass(frozen=True)
+class LeanProjectArtifact:
+    path: str
+    claim_id: str
+    certificate_digests: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class ExportPrepared:
+    artifact: LeanProjectArtifact
+
+
+@dataclass(frozen=True)
+class ExportVerified:
+    artifact: LeanProjectArtifact
+    trust_class: Literal["kernel"]
+    build_output: str
+
+
+@dataclass(frozen=True)
+class ExportUnsupported:
+    reason: str
+
+
+@dataclass(frozen=True)
+class ExportDependencyUnavailable:
+    reason: str
+
+
+@dataclass(frozen=True)
+class ExportVerificationMismatch:
+    artifact: LeanProjectArtifact
+    reason: str
+    build_output: str
 
 
 @dataclass(frozen=True)
@@ -51,6 +118,7 @@ class BoundCheckEvidence:
     backend: Optional[str]
     taylor_depth: int
     certificate: Optional[Mapping[str, Any]] = None
+    replay_certificate: ReplayableBoundCertificate | None = None
     raw_response: Mapping[str, Any] = field(default_factory=dict)
 
 
@@ -94,6 +162,17 @@ class BoundCheck:
 @dataclass(frozen=True)
 class Verified(BoundCheck):
     """Every requested bound was accepted by the checked bridge route."""
+
+    def export_lean_project(
+        self,
+        path: str,
+        *,
+        verify: bool = True,
+    ):
+        """Export and optionally kernel-check the retained fixed certificates."""
+        from .export import export_verified_bound
+
+        return export_verified_bound(self, path, verify=verify)
 
 
 @dataclass(frozen=True)
@@ -192,12 +271,22 @@ class Certificate:
         return hashlib.sha256(content.encode()).hexdigest()
 
     def to_lean_tactic(self) -> str:
+        """Deprecated compatibility spelling for a non-authoritative proof sketch."""
+        warnings.warn(
+            "Certificate.to_lean_tactic() is not authoritative; use "
+            "Verified.export_lean_project() for replayable evidence",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return self.render_proof_sketch()
+
+    def render_proof_sketch(self) -> str:
         """
-        Generate Lean tactic code that reproduces the verified proof.
+        Render illustrative Lean text without claiming it replays a certificate.
 
         Returns a string of Lean code that can be pasted into a Lean file.
-        This provides the "round trip" - Python finds the certificate,
-        then generates Lean code that verifies it.
+        This legacy renderer may contain tactic reconstruction and is not an
+        independently rebuildable proof artifact.
 
         Example output for find_bounds:
             theorem bound_check : ∀ x ∈ Set.Icc 0 1, x^2 ≤ 1 := by

@@ -29,6 +29,14 @@ def verified_bound() -> dict:
     return _fixture("verified-bound.json")
 
 
+def replay_handshake() -> dict:
+    return _fixture("handshake.json", "bridge-contract-2.1")
+
+
+def replay_bound() -> dict:
+    return _fixture("verified-bound.json", "bridge-contract-2.1")
+
+
 def test_semantic_versions_are_canonical_and_major_checked():
     assert ProtocolVersion.parse("1.1.0") == ProtocolVersion(1, 1, 0)
     with pytest.raises(ProtocolViolation, match="semantic versioning"):
@@ -94,6 +102,54 @@ def test_verified_bound_descriptor_is_typed():
     assert outcome.certificate.schema_version == "bound-check/1"
 
 
+def test_contract_2_1_retains_resolved_dependencies_and_replay_payload():
+    handshake = BridgeHandshake.parse(replay_handshake())
+    assert handshake.dependencies is not None
+    assert handshake.dependencies.lean_toolchain == "leanprover/lean4:v4.32.2"
+    assert handshake.dependencies.leancert_resolved_revision == (
+        "6f0c9ae5bcd5e40463d9771f06b33ef145c242f6"
+    )
+    outcome = handshake.parse_bound_outcome(replay_bound(), expected_direction="upper")
+    assert outcome.certificate is not None and outcome.certificate.payload is not None
+    assert outcome.certificate.payload.bound.fraction == 1
+    assert outcome.certificate.payload.box[0].lower.fraction == 0
+    assert outcome.certificate.payload.config.max_iterations == 1000
+    assert outcome.certificate.payload.digest.startswith("sha256:")
+    nested = replay_bound()
+    nested["certificate"]["payload"]["expression"] = {
+        "kind": "neg",
+        "e": {"kind": "var", "idx": 0},
+    }
+    nested_outcome = handshake.parse_bound_outcome(nested, expected_direction="upper")
+    assert nested_outcome.certificate is not None
+    nested_payload = nested_outcome.certificate.payload
+    assert nested_payload is not None
+    with pytest.raises(TypeError):
+        nested_payload.expression["e"]["idx"] = 1
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    [
+        (lambda value: value["certificate"]["payload"].update(direction="lower"), "direction"),
+        (
+            lambda value: value["certificate"]["payload"]["bound"].update(n=2, d=2),
+            "reduced",
+        ),
+        (
+            lambda value: value["certificate"]["payload"]["config"].pop("taylor_depth"),
+            "configuration",
+        ),
+    ],
+)
+def test_replay_payload_mutations_are_protocol_violations(mutation, message):
+    handshake = BridgeHandshake.parse(replay_handshake())
+    response = deepcopy(replay_bound())
+    mutation(response)
+    with pytest.raises(ProtocolViolation, match=message):
+        handshake.parse_bound_outcome(response, expected_direction="upper")
+
+
 @pytest.mark.parametrize(
     ("mutation", "message"),
     [
@@ -103,7 +159,7 @@ def test_verified_bound_descriptor_is_typed():
             "verification route was not advertised",
         ),
         (
-            lambda value: value["certificate"].update(schema_version="bound-check/2"),
+            lambda value: value["certificate"].update(schema_version="bound-check/9"),
             "certificate schema was not advertised",
         ),
     ],

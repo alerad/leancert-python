@@ -172,6 +172,40 @@ class BuildProvenance:
 
 
 @dataclass(frozen=True, slots=True)
+class ResolvedDependencies:
+    """Exact toolchain and LeanCert source selected by the bridge build."""
+
+    lean_toolchain: str
+    leancert_source: str
+    leancert_input_revision: str
+    leancert_resolved_revision: str
+
+    @classmethod
+    def parse(cls, value: Any) -> ResolvedDependencies:
+        obj = _object(value, "dependencies")
+        if set(obj) != {"lean", "leancert"}:
+            raise ProtocolViolation("dependency provenance fields do not match Contract 2.1")
+        lean = _object(obj["lean"], "dependencies.lean")
+        leancert = _object(obj["leancert"], "dependencies.leancert")
+        if set(lean) != {"toolchain"} or set(leancert) != {
+            "source",
+            "input_revision",
+            "resolved_revision",
+        }:
+            raise ProtocolViolation("resolved dependency fields do not match Contract 2.1")
+        toolchain = _string(lean["toolchain"], "dependencies.lean.toolchain")
+        source = _string(leancert["source"], "dependencies.leancert.source")
+        input_revision = _string(
+            leancert["input_revision"], "dependencies.leancert.input_revision"
+        )
+        resolved_revision = _string(
+            leancert["resolved_revision"], "dependencies.leancert.resolved_revision"
+        )
+        assert all((toolchain, source, input_revision, resolved_revision))
+        return cls(toolchain, source, input_revision, resolved_revision)
+
+
+@dataclass(frozen=True, slots=True)
 class BridgeHandshake:
     api_version: ProtocolVersion
     protocol_version: ProtocolVersion
@@ -188,6 +222,7 @@ class BridgeHandshake:
     protocol_name: str | None = None
     framing: str | None = None
     build: BuildProvenance | None = None
+    dependencies: ResolvedDependencies | None = None
 
     @property
     def typed_contract(self) -> bool:
@@ -307,6 +342,11 @@ class BridgeHandshake:
                 "typed bridges must advertise expression nodes, certificate schemas, and routes"
             )
         build = None if api.major < 2 else BuildProvenance.parse(obj.get("build"))
+        dependencies = (
+            ResolvedDependencies.parse(obj.get("dependencies"))
+            if api >= ProtocolVersion(2, 1, 0)
+            else None
+        )
         raw_capabilities = obj.get("capabilities")
         if raw_capabilities is None and not typed:
             capability_items: tuple[OperationCapability, ...] = ()
@@ -353,6 +393,7 @@ class BridgeHandshake:
             protocol_name,
             framing,
             build,
+            dependencies,
         )
 
 
@@ -400,20 +441,180 @@ class WireEnclosure:
         return result
 
 
+def _canonical_wire_rational(value: Any, name: str) -> WireRational:
+    parsed = WireRational.parse(value, name)
+    obj = _object(value, name)
+    if obj["n"] != parsed.numerator or obj["d"] != parsed.denominator:
+        raise ProtocolViolation(f"{name} must be reduced with a positive denominator")
+    return parsed
+
+
+def _freeze_json(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return MappingProxyType({key: _freeze_json(item) for key, item in value.items()})
+    if isinstance(value, list):
+        return tuple(_freeze_json(item) for item in value)
+    return value
+
+
+def _plain_json(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {key: _plain_json(item) for key, item in value.items()}
+    if isinstance(value, (tuple, list)):
+        return [_plain_json(item) for item in value]
+    return value
+
+
+def _canonical_core_expression(value: Any, name: str = "certificate.payload.expression") -> Any:
+    obj = _object(value, name)
+    kind = _string(obj.get("kind"), f"{name}.kind")
+    if kind == "const":
+        if set(obj) != {"kind", "val"}:
+            raise ProtocolViolation(f"{name} constant fields are not canonical")
+        rat = _canonical_wire_rational(obj["val"], f"{name}.val")
+        return {"kind": "const", "val": {"n": rat.numerator, "d": rat.denominator}}
+    if kind == "var":
+        if set(obj) != {"kind", "idx"}:
+            raise ProtocolViolation(f"{name} variable fields are not canonical")
+        index = obj["idx"]
+        if isinstance(index, bool) or not isinstance(index, int) or index < 0:
+            raise ProtocolViolation(f"{name}.idx must be a natural number")
+        return {"kind": "var", "idx": index}
+    if kind in {"add", "mul"}:
+        if set(obj) != {"kind", "e1", "e2"}:
+            raise ProtocolViolation(f"{name} binary fields are not canonical")
+        return {
+            "kind": kind,
+            "e1": _canonical_core_expression(obj["e1"], f"{name}.e1"),
+            "e2": _canonical_core_expression(obj["e2"], f"{name}.e2"),
+        }
+    if kind in {
+        "neg", "inv", "exp", "sin", "cos", "log", "atan", "arsinh",
+        "atanh", "sinc", "erf", "sinh", "cosh", "tanh", "sqrt",
+    }:
+        if set(obj) != {"kind", "e"}:
+            raise ProtocolViolation(f"{name} unary fields are not canonical")
+        return {"kind": kind, "e": _canonical_core_expression(obj["e"], f"{name}.e")}
+    if kind == "named_const":
+        if set(obj) != {"kind", "name"} or obj["name"] not in {
+            "pi", "euler_mascheroni",
+        }:
+            raise ProtocolViolation(f"{name} named constant is not canonical")
+        return {"kind": kind, "name": obj["name"]}
+    raise ProtocolViolation(f"{name} contains unknown core expression kind {kind!r}")
+
+
+@dataclass(frozen=True, slots=True)
+class ReplayBoundConfig:
+    max_iterations: int
+    tolerance: WireRational
+    use_monotonicity: bool
+    taylor_depth: int
+
+
+@dataclass(frozen=True, slots=True)
+class ReplayBoundPayload:
+    expression: Mapping[str, Any]
+    box: tuple[WireEnclosure, ...]
+    bound: WireRational
+    direction: str
+    config: ReplayBoundConfig
+    canonical: Mapping[str, Any]
+
+    @classmethod
+    def parse(cls, value: Any) -> ReplayBoundPayload:
+        obj = _object(value, "certificate.payload")
+        required = {"schema_version", "expression", "box", "bound", "direction", "config"}
+        if set(obj) != required or obj.get("schema_version") != "global-opt-bound-replay/1":
+            raise ProtocolViolation("replay payload fields do not match global-opt-bound-replay/1")
+        expression = _canonical_core_expression(obj["expression"])
+        if not isinstance(obj["box"], list):
+            raise ProtocolViolation("certificate.payload.box must be an array")
+        box_items: list[WireEnclosure] = []
+        for index, entry in enumerate(obj["box"]):
+            item = _object(entry, f"certificate.payload.box[{index}]")
+            if set(item) != {"lo", "hi"}:
+                raise ProtocolViolation("certificate replay interval fields are not canonical")
+            box_items.append(
+                WireEnclosure(
+                    _canonical_wire_rational(
+                        item["lo"], f"certificate.payload.box[{index}].lo"
+                    ),
+                    _canonical_wire_rational(
+                        item["hi"], f"certificate.payload.box[{index}].hi"
+                    ),
+                )
+            )
+        box = tuple(box_items)
+        if any(item.lower.fraction > item.upper.fraction for item in box):
+            raise ProtocolViolation("certificate replay box has inverted endpoints")
+        bound = _canonical_wire_rational(obj["bound"], "certificate.payload.bound")
+        direction = _string(obj["direction"], "certificate.payload.direction")
+        if direction not in {"lower", "upper"}:
+            raise ProtocolViolation("certificate.payload.direction must be lower or upper")
+        config_obj = _object(obj["config"], "certificate.payload.config")
+        if set(config_obj) != {
+            "max_iterations", "tolerance", "use_monotonicity", "taylor_depth"
+        }:
+            raise ProtocolViolation("replay configuration fields are not canonical")
+        maximum, depth = config_obj["max_iterations"], config_obj["taylor_depth"]
+        monotonicity = config_obj["use_monotonicity"]
+        if any(isinstance(item, bool) or not isinstance(item, int) or item < 0 for item in (maximum, depth)):
+            raise ProtocolViolation("replay iteration and Taylor limits must be natural numbers")
+        if not isinstance(monotonicity, bool):
+            raise ProtocolViolation("replay use_monotonicity must be boolean")
+        tolerance = _canonical_wire_rational(
+            config_obj["tolerance"], "certificate.payload.config.tolerance"
+        )
+        config = ReplayBoundConfig(maximum, tolerance, monotonicity, depth)
+        canonical_box = [
+            {
+                "lo": {"n": item.lower.numerator, "d": item.lower.denominator},
+                "hi": {"n": item.upper.numerator, "d": item.upper.denominator},
+            }
+            for item in box
+        ]
+        canonical = {
+            "schema_version": "global-opt-bound-replay/1",
+            "expression": expression,
+            "box": canonical_box,
+            "bound": {"n": bound.numerator, "d": bound.denominator},
+            "direction": direction,
+            "config": {
+                "max_iterations": maximum,
+                "tolerance": {"n": tolerance.numerator, "d": tolerance.denominator},
+                "use_monotonicity": monotonicity,
+                "taylor_depth": depth,
+            },
+        }
+        frozen = _freeze_json(canonical)
+        return cls(frozen["expression"], box, bound, direction, config, frozen)
+
+    @property
+    def digest(self) -> str:
+        encoded = json.dumps(
+            _plain_json(self.canonical), sort_keys=True, separators=(",", ":")
+        ).encode()
+        return "sha256:" + hashlib.sha256(encoded).hexdigest()
+
+
 @dataclass(frozen=True, slots=True)
 class CertificateDescriptor:
     schema_version: str
     checker: str
     verifier: str
     verification_route: str
+    payload: ReplayBoundPayload | None = None
 
     @classmethod
     def parse(cls, value: Any) -> CertificateDescriptor:
         obj = _object(value, "certificate")
+        schema_version = _string(obj.get("schema_version"), "certificate.schema_version")
         required = {"schema_version", "checker", "verifier", "verification_route"}
+        if schema_version == "bound-check/2":
+            required.add("payload")
         if set(obj) != required:
             raise ProtocolViolation("certificate descriptor fields do not match its schema")
-        schema_version = _string(obj["schema_version"], "certificate.schema_version")
         checker = _string(obj["checker"], "certificate.checker")
         verifier = _string(obj["verifier"], "certificate.verifier")
         route = _string(obj["verification_route"], "certificate.verification_route")
@@ -424,6 +625,7 @@ class CertificateDescriptor:
             checker=checker,
             verifier=verifier,
             verification_route=route,
+            payload=(ReplayBoundPayload.parse(obj["payload"]) if "payload" in obj else None),
         )
 
 
@@ -491,4 +693,10 @@ class BoundOperationOutcome:
             raise ProtocolViolation("only verified check_bound results may retain a certificate")
         if expected_direction is not None and direction != expected_direction:
             raise ProtocolViolation("check_bound direction contradicts the request")
+        if (
+            certificate is not None
+            and certificate.payload is not None
+            and certificate.payload.direction != direction
+        ):
+            raise ProtocolViolation("replay payload direction contradicts bound outcome")
         return cls(status, direction, enclosure, backend, certificate, MappingProxyType(dict(obj)))

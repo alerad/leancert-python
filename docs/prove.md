@@ -36,7 +36,9 @@ two_sided = lc.prove(
 Each requested lower or upper bound is checked exactly once. A successful
 result retains the normalized closed claim, its `ClaimDigest`, the enclosure,
 checker and verifier identities, verification route, numerical backend, and
-the complete Contract 2.0 build provenance.
+the complete build provenance. Contract 2.1 additionally retains the exact
+fixed checker input and resolved Lean dependencies needed for
+[independently rebuildable export](export.md).
 
 Strict inequalities, roots, integrals, eventual claims, and external functions
 currently return `Unsupported`. They are not routed through a discovery API or

@@ -90,6 +90,14 @@ from .result import (
     Inconclusive,
     Unsupported,
     DomainObstruction,
+    ReplayableBoundCertificate,
+    ReplayBoundConfig,
+    LeanProjectArtifact,
+    ExportPrepared,
+    ExportVerified,
+    ExportUnsupported,
+    ExportDependencyUnavailable,
+    ExportVerificationMismatch,
 )
 
 # Adaptive verification (CEGAR)
