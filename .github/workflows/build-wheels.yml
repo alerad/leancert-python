@@ -38,7 +38,7 @@ jobs:
         run: pip install -e '.[dev]'
 
       - name: Run bridge-independent safety and contract tests
-        run: pytest -q leancert/tests/test_bound_outcomes.py leancert/tests/test_client_contract.py leancert/tests/test_protocol_v2.py leancert/tests/test_unified_prove.py leancert/tests/test_export.py leancert/tests/test_result.py leancert/tests/test_rational.py
+        run: pytest -q leancert/tests/test_bound_outcomes.py leancert/tests/test_client_contract.py leancert/tests/test_protocol_v2.py leancert/tests/test_unified_prove.py leancert/tests/test_export.py leancert/tests/test_doctor.py leancert/tests/test_result.py leancert/tests/test_rational.py
 
   build-wheels:
     strategy:
@@ -201,16 +201,33 @@ jobs:
         run: |
           python -c "
           import leancert as lc
+          import tempfile
           from leancert import ast
+          from pathlib import Path
+          doctor = lc.diagnose()
+          assert doctor.healthy, doctor.to_dict()
           x = ast.var('x')
           checked = lc.prove(x**2 <= 1, where={x: (0, 1)})
           assert isinstance(checked, lc.Verified)
-          assert checked.provenance.bridge_api_version == '2.0.0'
-          assert checked.provenance.protocol_version == '2.0.0'
+          assert checked.provenance.bridge_api_version == '2.2.0'
+          assert checked.provenance.protocol_version == '2.2.0'
           assert checked.provenance.lean_version
           assert checked.provenance.build_profile == 'release'
           assert checked.provenance.source_digest.startswith('sha256:')
           assert checked.provenance.environment_digest.startswith('sha256:')
+          with tempfile.TemporaryDirectory() as root:
+              proof = Path(root) / 'proof'
+              exported = checked.export_lean_project(str(proof), verify=False)
+              assert isinstance(exported, lc.ExportPrepared)
+              assert (proof / 'LeanCertExport.lean').is_file()
+          legacy_expr = lc.var('x')
+          adaptive = lc.verify_bound_adaptive(
+              legacy_expr * (1 - legacy_expr),
+              {'x': (0, 1)},
+              upper=0.3,
+              adaptive_config=lc.AdaptiveConfig(max_splits=5),
+          )
+          assert adaptive.verified
           overlap = lc.prove(x - x <= -1, where={x: (0, 1)})
           assert isinstance(overlap, lc.Inconclusive)
           legacy_x = lc.var('x')

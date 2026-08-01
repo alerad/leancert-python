@@ -298,6 +298,28 @@ class BridgeHandshake:
                 raise ProtocolViolation("bound verification route is absent from the handshake")
         return outcome
 
+    def parse_adaptive_outcome(
+        self, value: Any, *, expected_direction: str
+    ) -> AdaptiveOperationOutcome:
+        capability = self.capability("verify_adaptive")
+        if capability is None:
+            raise ProtocolViolation(
+                "bridge returned an adaptive outcome without verify_adaptive capability"
+            )
+        outcome = AdaptiveOperationOutcome.parse(
+            value, expected_direction=expected_direction
+        )
+        if outcome.status not in capability.outcomes:
+            raise ProtocolViolation("adaptive status was not advertised")
+        if outcome.backend not in capability.backends:
+            raise ProtocolViolation("adaptive backend was not advertised")
+        if outcome.certificate is not None:
+            if "adaptive-bound-check/1" not in capability.certificate_schemas:
+                raise ProtocolViolation("adaptive certificate schema was not advertised")
+            if "compiled_checker" not in capability.verification_routes:
+                raise ProtocolViolation("adaptive verification route was not advertised")
+        return outcome
+
     @classmethod
     def parse(cls, value: Any) -> BridgeHandshake:
         obj = _object(value, "get_info result")
@@ -700,3 +722,91 @@ class BoundOperationOutcome:
         ):
             raise ProtocolViolation("replay payload direction contradicts bound outcome")
         return cls(status, direction, enclosure, backend, certificate, MappingProxyType(dict(obj)))
+
+
+@dataclass(frozen=True, slots=True)
+class AdaptiveOperationOutcome:
+    """Checked adaptive-optimizer outcome introduced by Bridge Contract 2.2."""
+
+    status: OutcomeStatus
+    direction: str
+    backend: str
+    enclosure: WireEnclosure | None
+    certificate: Mapping[str, Any] | None
+    raw: Mapping[str, Any]
+
+    @classmethod
+    def parse(
+        cls,
+        value: Any,
+        *,
+        expected_direction: str,
+    ) -> AdaptiveOperationOutcome:
+        obj = _object(value, "verify_adaptive result")
+        required = {"verified", "status", "direction", "backend", "certificate"}
+        missing = required - obj.keys()
+        if missing:
+            raise ProtocolViolation(
+                "typed verify_adaptive result missing " + ", ".join(sorted(missing))
+            )
+        if not isinstance(obj["verified"], bool):
+            raise ProtocolViolation("verify_adaptive.verified must be boolean")
+        try:
+            status = OutcomeStatus(obj["status"])
+        except (TypeError, ValueError) as exc:
+            raise ProtocolViolation("verify_adaptive.status is unknown") from exc
+        direction = _string(obj["direction"], "verify_adaptive.direction")
+        backend = _string(obj["backend"], "verify_adaptive.backend")
+        assert direction is not None and backend is not None
+        if direction != expected_direction:
+            raise ProtocolViolation("verify_adaptive direction contradicts the request")
+        if obj["verified"] != (status is OutcomeStatus.VERIFIED):
+            raise ProtocolViolation("verify_adaptive verified flag contradicts status")
+        enclosure = (
+            WireEnclosure.parse(obj["enclosure"], "verify_adaptive.enclosure")
+            if "enclosure" in obj
+            else None
+        )
+        certificate = obj["certificate"]
+        if status is OutcomeStatus.VERIFIED:
+            cert = _object(certificate, "verify_adaptive.certificate")
+            if set(cert) != {
+                "schema_version", "checker", "verifier", "verification_route", "payload"
+            }:
+                raise ProtocolViolation("adaptive certificate fields are not canonical")
+            if cert["schema_version"] != "adaptive-bound-check/1":
+                raise ProtocolViolation("adaptive certificate schema is unsupported")
+            if cert["verification_route"] != "compiled_checker":
+                raise ProtocolViolation("adaptive certificate route is unsupported")
+            expected_checker = (
+                "LeanCert.Engine.Optimization.globalMaximizeRationalChecked"
+                if direction == "upper"
+                else "LeanCert.Engine.Optimization.globalMinimizeRationalChecked"
+            )
+            expected_verifier = (
+                "LeanCert.Engine.Optimization.globalMaximizeRationalChecked_hi_correct"
+                if direction == "upper"
+                else "LeanCert.Engine.Optimization.globalMinimizeRationalChecked_lo_correct"
+            )
+            if cert["checker"] != expected_checker or cert["verifier"] != expected_verifier:
+                raise ProtocolViolation("adaptive certificate authority is not recognized")
+            payload = _object(cert["payload"], "verify_adaptive.certificate.payload")
+            if payload.get("schema_version") != "checked-global-opt-bound/1":
+                raise ProtocolViolation("adaptive certificate payload schema is unsupported")
+            if payload.get("direction") != direction:
+                raise ProtocolViolation("adaptive certificate direction contradicts outcome")
+            if enclosure is None or WireEnclosure.parse(
+                payload.get("candidate_enclosure"),
+                "verify_adaptive.certificate.payload.candidate_enclosure",
+            ) != enclosure:
+                raise ProtocolViolation("adaptive certificate enclosure contradicts outcome")
+        elif certificate is not None:
+            raise ProtocolViolation("only verified adaptive outcomes may retain a certificate")
+        return cls(
+            status,
+            direction,
+            backend,
+            enclosure,
+            None if certificate is None else _freeze_json(certificate),
+            MappingProxyType(dict(obj)),
+        )

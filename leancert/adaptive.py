@@ -1441,20 +1441,52 @@ class CEGARVerifier:
                 config=self.solver_config,
             )
 
+            proof_fragment = "interval_decide"
             if not isinstance(outcome, Verified):
-                elapsed = (time.time() - start) * 1000
-                return SubdomainResult(
-                    subdomain=subdomain,
-                    verified=False,
-                    verification_time_ms=elapsed,
-                    gradient_info=gradient_info,
-                )
+                # Contract 2.2 exposes LeanCert's checked rational optimizer as
+                # a typed fallback.  It is useful when the replayable, fixed
+                # bound checker is sound but too coarse on this leaf.
+                client = self.solver._ensure_client()
+                contract = client.bridge_contract
+                capability = contract.capability("verify_adaptive")
+                adaptive_verified = capability is not None
+                if adaptive_verified:
+                    expr_json, checked_box = self.solver._prepare_request(
+                        expr, subdomain.box
+                    )
+                    box_json = checked_box.to_kernel_list()
+                    cfg = self.solver_config.to_kernel()
+                    for direction, value in (("lower", lower), ("upper", upper)):
+                        if value is None:
+                            continue
+                        bound = to_fraction(value)
+                        response = client.verify_adaptive(
+                            expr_json,
+                            box_json,
+                            {"n": bound.numerator, "d": bound.denominator},
+                            is_upper_bound=direction == "upper",
+                            max_iters=cfg["maxIters"],
+                            tolerance=cfg["tolerance"],
+                            taylor_depth=cfg["taylorDepth"],
+                        )
+                        if not response.get("verified", False):
+                            adaptive_verified = False
+                            break
+                if not adaptive_verified:
+                    elapsed = (time.time() - start) * 1000
+                    return SubdomainResult(
+                        subdomain=subdomain,
+                        verified=False,
+                        verification_time_ms=elapsed,
+                        gradient_info=gradient_info,
+                    )
+                proof_fragment = "checked_adaptive_optimizer"
 
             elapsed = (time.time() - start) * 1000
             return SubdomainResult(
                 subdomain=subdomain,
                 verified=True,
-                proof_fragment="interval_decide",
+                proof_fragment=proof_fragment,
                 verification_time_ms=elapsed,
                 gradient_info=gradient_info,
             )

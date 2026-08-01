@@ -24,6 +24,84 @@ from .exceptions import BridgeError, BridgeRemoteError, ProtocolViolation
 from .protocol import BoundOperationOutcome, BridgeHandshake
 
 
+def _bridge_core_expression(value: dict[str, Any]) -> dict[str, Any]:
+    """Mirror the bridge's documented desugaring into LeanCert.Core.Expr."""
+    kind = value["kind"]
+    if kind == "const":
+        rat = Fraction(value["val"]["n"], value["val"]["d"])
+        return {"kind": "const", "val": {"n": rat.numerator, "d": rat.denominator}}
+    if kind == "var":
+        return {"kind": "var", "idx": value["idx"]}
+    if kind in {"add", "mul"}:
+        return {
+            "kind": kind,
+            "e1": _bridge_core_expression(value["e1"]),
+            "e2": _bridge_core_expression(value["e2"]),
+        }
+    if kind == "sub":
+        return {
+            "kind": "add",
+            "e1": _bridge_core_expression(value["e1"]),
+            "e2": {"kind": "neg", "e": _bridge_core_expression(value["e2"])},
+        }
+    if kind == "div":
+        return {
+            "kind": "mul",
+            "e1": _bridge_core_expression(value["e1"]),
+            "e2": {"kind": "inv", "e": _bridge_core_expression(value["e2"])},
+        }
+    if kind == "pow":
+        base = _bridge_core_expression(value["base"])
+        result: dict[str, Any] = {"kind": "const", "val": {"n": 1, "d": 1}}
+        for _ in range(value["exp"]):
+            result = {"kind": "mul", "e1": base, "e2": result}
+        return result
+    if kind == "tan":
+        expression = _bridge_core_expression(value["e"])
+        return {
+            "kind": "mul",
+            "e1": {"kind": "sin", "e": expression},
+            "e2": {"kind": "inv", "e": {"kind": "cos", "e": expression}},
+        }
+    if kind == "sqrt":
+        expression = _bridge_core_expression(value["e"])
+        return {
+            "kind": "exp",
+            "e": {
+                "kind": "mul",
+                "e1": {"kind": "log", "e": expression},
+                "e2": {"kind": "inv", "e": {"kind": "const", "val": {"n": 2, "d": 1}}},
+            },
+        }
+    if kind == "abs":
+        expression = _bridge_core_expression(value["e"])
+        return {"kind": "sqrt", "e": {"kind": "mul", "e1": expression, "e2": expression}}
+    if kind in {"min", "max"}:
+        left = _bridge_core_expression(value["e1"])
+        right = _bridge_core_expression(value["e2"])
+        difference = {"kind": "add", "e1": left, "e2": {"kind": "neg", "e": right}}
+        absolute = {"kind": "sqrt", "e": {"kind": "mul", "e1": difference, "e2": difference}}
+        signed = absolute if kind == "max" else {"kind": "neg", "e": absolute}
+        numerator = {
+            "kind": "add",
+            "e1": {"kind": "add", "e1": left, "e2": right},
+            "e2": signed,
+        }
+        return {
+            "kind": "mul",
+            "e1": numerator,
+            "e2": {"kind": "inv", "e": {"kind": "const", "val": {"n": 2, "d": 1}}},
+        }
+    if kind in {
+        "neg", "inv", "exp", "sin", "cos", "log", "atan", "arsinh",
+        "atanh", "sinc", "erf", "sinh", "cosh", "tanh",
+    }:
+        return {"kind": kind, "e": _bridge_core_expression(value["e"])}
+    if kind == "named_const":
+        return {"kind": kind, "name": value["name"]}
+    raise ProtocolViolation(f"unsupported expression kind in adaptive certificate: {kind!r}")
+
+
 class LeanClient:
     """
     Low-level client for the Lean math kernel.
@@ -74,8 +152,7 @@ class LeanClient:
         # Search order:
         # 1. Bundled with package (pip install leancert)
         # 2. Local repo build output
-        # 3. Sibling bridge repo build output (workspace setup)
-        # 4. System PATH
+        # 3. System PATH
         candidates = [
             # Bundled binary (installed via pip)
             module_dir / "bin" / binary_name,
@@ -83,10 +160,6 @@ class LeanClient:
             module_dir.parent / ".lake" / "build" / "bin" / binary_name,
             # From current working directory
             Path.cwd() / ".lake" / "build" / "bin" / binary_name,
-            # Typical sibling checkout layout:
-            # workspace/leancert-python and workspace/leancert-bridge
-            module_dir.parent.parent / "leancert-bridge" / ".lake" / "build" / "bin" / binary_name,
-            Path.cwd().parent / "leancert-bridge" / ".lake" / "build" / "bin" / binary_name,
         ]
 
         for candidate in candidates:
@@ -599,18 +672,45 @@ class LeanClient:
         minimizing c - f (for upper) or f - c (for lower) and checking
         if the minimum is >= 0.
         """
-        return self.call(
+        request = {
+            "expr": expr_json,
+            "box": box_json,
+            "bound": bound,
+            "isUpperBound": is_upper_bound,
+            "maxIters": max_iters,
+            "tolerance": {"n": 1, "d": 1000} if tolerance is None else tolerance,
+            "taylorDepth": taylor_depth,
+        }
+        response = self.call(
             "verify_adaptive",
-            {
-                "expr": expr_json,
-                "box": box_json,
-                "bound": bound,
-                "isUpperBound": is_upper_bound,
-                "maxIters": max_iters,
-                "tolerance": {"n": 1, "d": 1000} if tolerance is None else tolerance,
-                "taylorDepth": taylor_depth,
-            },
+            request,
         )
+        contract = self.bridge_contract
+        if contract.api_version >= type(contract.api_version)(2, 2, 0):
+            outcome = contract.parse_adaptive_outcome(
+                response, expected_direction="upper" if is_upper_bound else "lower"
+            )
+            if outcome.certificate is not None:
+                payload = response["certificate"]["payload"]
+                expected_config = {
+                    "max_iterations": max_iters,
+                    "tolerance": request["tolerance"],
+                    "use_monotonicity": True,
+                    "taylor_depth": taylor_depth,
+                }
+                expected = {
+                    "expression": _bridge_core_expression(expr_json),
+                    "box": box_json,
+                    "bound": bound,
+                    "direction": "upper" if is_upper_bound else "lower",
+                    "config": expected_config,
+                }
+                for key, value in expected.items():
+                    if payload.get(key) != value:
+                        raise ProtocolViolation(
+                            f"adaptive certificate {key} does not match the checked request"
+                        )
+        return response
 
     def find_unique_root(
         self,
