@@ -1,0 +1,38 @@
+{
+  "bridge_api_version": "2.1.0",
+  "protocol_version": "2.1.0",
+  "protocol_name": "leancert-line-json",
+  "framing": "ndjson",
+  "bridge_version": "0.4.0",
+  "lean_version": "4.32.2",
+  "leancert_version": "4.32.2.3",
+  "build": {
+    "source_revision": "0123456789abcdef",
+    "source_digest": "sha256:source",
+    "environment_digest": "sha256:environment",
+    "profile": "release"
+  },
+  "dependencies": {
+    "lean": {"toolchain": "leanprover/lean4:v4.32.2"},
+    "leancert": {
+      "source": "https://github.com/alerad/leancert.git",
+      "input_revision": "v4.32.2.3",
+      "resolved_revision": "6f0c9ae5bcd5e40463d9771f06b33ef145c242f6"
+    }
+  },
+  "operations": ["ping", "get_info", "check_bound"],
+  "expression_nodes": ["const", "var", "add", "mul", "neg", "inv"],
+  "certificate_schemas": ["bound-check/2"],
+  "verification_routes": ["compiled_checker"],
+  "capabilities": {
+    "check_bound": {
+      "schema_version": "2.1",
+      "request_schema": "check-bound-request/1",
+      "result_schema": "bound-outcome/1",
+      "outcomes": ["verified", "inconclusive", "unsupported", "domain_obstruction"],
+      "backends": ["rational_global_optimization"],
+      "certificate_schemas": ["bound-check/2"],
+      "verification_routes": ["compiled_checker"]
+    }
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "verified": true,
+  "status": "verified",
+  "direction": "upper",
+  "computed_lo": {"n": 1, "d": 1},
+  "computed_hi": {"n": 1, "d": 1},
+  "enclosure": {"lo": {"n": 1, "d": 1}, "hi": {"n": 1, "d": 1}},
+  "backend": "rational_global_optimization",
+  "certificate": {
+    "schema_version": "bound-check/2",
+    "checker": "LeanCert.Validity.GlobalOpt.checkGlobalUpperBound",
+    "verifier": "LeanCert.Validity.GlobalOpt.verify_global_upper_bound",
+    "verification_route": "compiled_checker",
+    "payload": {
+      "schema_version": "global-opt-bound-replay/1",
+      "expression": {"kind": "var", "idx": 0},
+      "box": [{"lo": {"n": 0, "d": 1}, "hi": {"n": 1, "d": 1}}],
+      "bound": {"n": 1, "d": 1},
+      "direction": "upper",
+      "config": {
+        "max_iterations": 1000,
+        "tolerance": {"n": 1, "d": 1000},
+        "use_monotonicity": true,
+        "taylor_depth": 10
+      }
+    }
+  }
+}

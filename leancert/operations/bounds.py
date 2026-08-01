@@ -14,12 +14,15 @@ from typing import Any
 from .. import ast
 from ..client import _parse_rat
 from ..domain import Interval as ResultInterval
+from ..exceptions import ProtocolViolation
 from ..result import (
     BoundCheckEvidence,
     BridgeProvenance,
     DomainObstruction,
     Inconclusive,
     ProofResult,
+    ReplayableBoundCertificate,
+    ReplayBoundConfig,
     Unsupported,
     Verified,
 )
@@ -193,6 +196,7 @@ def bridge_provenance(client: Any) -> BridgeProvenance:
     info = client.bridge_info
     build = info.get("build") if isinstance(info.get("build"), dict) else {}
     contract = client.bridge_contract
+    dependencies = contract.dependencies
     return BridgeProvenance(
         bridge_api_version=info.get("bridge_api_version"),
         protocol_version=info.get("protocol_version"),
@@ -204,6 +208,114 @@ def bridge_provenance(client: Any) -> BridgeProvenance:
         environment_digest=build.get("environment_digest"),
         build_profile=build.get("profile"),
         capability_digest=contract.capability_digest,
+        lean_toolchain=None if dependencies is None else dependencies.lean_toolchain,
+        leancert_source=None if dependencies is None else dependencies.leancert_source,
+        leancert_input_revision=(
+            None if dependencies is None else dependencies.leancert_input_revision
+        ),
+        leancert_resolved_revision=(
+            None if dependencies is None else dependencies.leancert_resolved_revision
+        ),
+    )
+
+
+def _lower_checked_expression(expression: dict[str, Any]) -> dict[str, Any]:
+    """Mirror bridge request decoding into the canonical LeanCert core AST."""
+    kind = expression["kind"]
+    if kind in {"const", "var"}:
+        return dict(expression)
+    if kind in {"add", "mul"}:
+        return {
+            "kind": kind,
+            "e1": _lower_checked_expression(expression["e1"]),
+            "e2": _lower_checked_expression(expression["e2"]),
+        }
+    if kind == "sub":
+        return {
+            "kind": "add",
+            "e1": _lower_checked_expression(expression["e1"]),
+            "e2": {"kind": "neg", "e": _lower_checked_expression(expression["e2"])},
+        }
+    if kind == "div":
+        return {
+            "kind": "mul",
+            "e1": _lower_checked_expression(expression["e1"]),
+            "e2": {"kind": "inv", "e": _lower_checked_expression(expression["e2"])},
+        }
+    if kind == "pow":
+        base = _lower_checked_expression(expression["base"])
+
+        def power(exponent: int) -> dict[str, Any]:
+            if exponent == 0:
+                return {"kind": "const", "val": {"n": 1, "d": 1}}
+            return {"kind": "mul", "e1": base, "e2": power(exponent - 1)}
+
+        return power(expression["exp"])
+    if kind in {
+        "neg", "inv", "exp", "sin", "cos", "log", "atan", "arsinh",
+        "atanh", "sinc", "erf", "sinh", "cosh", "tanh",
+    }:
+        return {"kind": kind, "e": _lower_checked_expression(expression["e"])}
+    if kind == "sqrt":
+        argument = _lower_checked_expression(expression["e"])
+        return {
+            "kind": "exp",
+            "e": {
+                "kind": "mul",
+                "e1": {"kind": "log", "e": argument},
+                "e2": {"kind": "inv", "e": {"kind": "const", "val": {"n": 2, "d": 1}}},
+            },
+        }
+    raise _UnsupportedBound(f"cannot validate replay lowering for expression kind {kind!r}")
+
+
+def _replay_certificate(
+    response: dict[str, Any],
+    *,
+    contract: Any,
+    expression_json: dict[str, Any],
+    box_json: list[dict[str, Any]],
+    bound: Fraction,
+    direction: str,
+    taylor_depth: int,
+) -> ReplayableBoundCertificate | None:
+    outcome = contract.parse_bound_outcome(response, expected_direction=direction)
+    descriptor = outcome.certificate
+    if descriptor is None or descriptor.payload is None:
+        return None
+    payload = descriptor.payload
+    expected_bound = _rat(bound)
+    expected_expression = _lower_checked_expression(expression_json)
+    if dict(payload.expression) != expected_expression:
+        raise ProtocolViolation("bridge replay expression does not match the checked request")
+    if list(payload.canonical["box"]) != box_json:
+        raise ProtocolViolation("bridge replay box does not match the checked request")
+    if dict(payload.canonical["bound"]) != expected_bound:
+        raise ProtocolViolation("bridge replay bound does not match the checked request")
+    if payload.direction != direction or payload.config.taylor_depth != taylor_depth:
+        raise ProtocolViolation(
+            "bridge replay direction or Taylor depth does not match the request"
+        )
+    return ReplayableBoundCertificate(
+        schema_version=descriptor.schema_version,
+        payload_schema="global-opt-bound-replay/1",
+        checker=descriptor.checker,
+        verifier=descriptor.verifier,
+        verification_route=descriptor.verification_route,
+        payload_digest=payload.digest,
+        expression=payload.expression,
+        box=tuple(
+            ResultInterval(item.lower.fraction, item.upper.fraction) for item in payload.box
+        ),
+        bound=payload.bound.fraction,
+        direction=payload.direction,
+        config=ReplayBoundConfig(
+            payload.config.max_iterations,
+            payload.config.tolerance.fraction,
+            payload.config.use_monotonicity,
+            payload.config.taylor_depth,
+        ),
+        canonical_payload=payload.canonical,
     )
 
 
@@ -254,7 +366,7 @@ def execute_bound_plan(
     if (
         capability.request_schema != "check-bound-request/1"
         or capability.result_schema != "bound-outcome/1"
-        or "bound-check/1" not in capability.certificate_schemas
+        or not capability.certificate_schemas.intersection({"bound-check/1", "bound-check/2"})
     ):
         return unsupported_result(
             original_claim,
@@ -304,6 +416,15 @@ def execute_bound_plan(
             _parse_rat(enclosure_json["lo"]), _parse_rat(enclosure_json["hi"])
         )
         status = response.get("status", "verified" if response["verified"] else "inconclusive")
+        replay = _replay_certificate(
+            response,
+            contract=contract,
+            expression_json=expression_json,
+            box_json=box_json,
+            bound=bound,
+            direction=direction,
+            taylor_depth=taylor_depth,
+        )
         checks.append(
             BoundCheckEvidence(
                 direction=direction,
@@ -314,6 +435,7 @@ def execute_bound_plan(
                 backend=response.get("backend"),
                 taylor_depth=taylor_depth,
                 certificate=response.get("certificate"),
+                replay_certificate=replay,
                 raw_response=dict(response),
             )
         )

@@ -28,6 +28,8 @@ The typed line-protocol negotiation and checked-response invariants are
 documented in [Python protocol model v2](docs/protocol-v2.md).
 The semantic claim front door is documented in
 [Unified checked proving](docs/prove.md).
+Verified bounds from Bridge Contract 2.1 can also be exported as
+[independently rebuildable Lean evidence](docs/export.md).
 
 ## Quick Start
 
