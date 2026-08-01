@@ -6,6 +6,7 @@ import json
 import re
 import shutil
 import subprocess
+import tempfile
 from dataclasses import asdict
 from fractions import Fraction
 from pathlib import Path
@@ -15,6 +16,7 @@ from . import ast
 from .result import (
     ExportDependencyUnavailable,
     ExportPrepared,
+    ExportResourceLimit,
     ExportUnsupported,
     ExportVerificationMismatch,
     ExportVerified,
@@ -188,7 +190,7 @@ def export_verified_bound(result: Verified, path: str, *, verify: bool = True):
     output = Path(path).expanduser().resolve()
     if output.exists():
         raise FileExistsError(f"export destination already exists: {output}")
-    output.mkdir(parents=True)
+    output.parent.mkdir(parents=True, exist_ok=True)
     claim_id = str(result.claim_id)
     artifact = LeanProjectArtifact(
         str(output), claim_id, tuple(item.payload_digest for item in replay)
@@ -204,60 +206,88 @@ def export_verified_bound(result: Verified, path: str, *, verify: bool = True):
         '[[lean_lib]]\n'
         'name = "LeanCertExport"\n'
     )
-    (output / "lean-toolchain").write_text(f"{provenance.lean_toolchain}\n")
-    (output / "lakefile.toml").write_text(lakefile)
-    (output / "LeanCertExport.lean").write_text(lean_source)
-    (output / "claim.json").write_text(
-        json.dumps(ast.encode_canonical(result.normalized_claim), indent=2, sort_keys=True) + "\n"
-    )
-    (output / "certificate.json").write_text(
-        json.dumps(
-            {
-                "claim_id": claim_id,
-                "certificates": [
-                    {
-                        "schema_version": item.schema_version,
-                        "payload_digest": item.payload_digest,
-                        "checker": item.checker,
-                        "verifier": item.verifier,
-                        "verification_route": item.verification_route,
-                        "payload": _jsonable(item.canonical_payload),
-                    }
-                    for item in replay
-                ],
-            },
-            indent=2,
-            sort_keys=True,
+    staging = Path(
+        tempfile.mkdtemp(prefix=f".{output.name}.", dir=str(output.parent))
+    ).resolve()
+    try:
+        (staging / "lean-toolchain").write_text(
+            f"{provenance.lean_toolchain}\n", encoding="utf-8"
         )
-        + "\n"
-    )
-    (output / "provenance.json").write_text(
-        json.dumps(_jsonable(asdict(provenance)), indent=2, sort_keys=True) + "\n"
-    )
-    (output / "README.md").write_text(
-        "# LeanCert exported claim\n\n"
-        "This project replays the fixed bound checker input retained by the Python SDK.\n\n"
-        "```bash\nlake update\nlake build\n```\n"
-    )
-    if not verify:
-        return ExportPrepared(artifact)
-    lake = shutil.which("lake")
-    if lake is None:
-        return ExportDependencyUnavailable("lake is not available on PATH")
-    process = subprocess.run(
-        [lake, "build", "LeanCertExport"],
-        cwd=output,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        timeout=900,
-        check=False,
-    )
-    if process.returncode != 0:
-        return ExportVerificationMismatch(
-            artifact, "exported project did not kernel-check", process.stdout
+        (staging / "lakefile.toml").write_text(lakefile, encoding="utf-8")
+        (staging / "LeanCertExport.lean").write_text(lean_source, encoding="utf-8")
+        (staging / "claim.json").write_text(
+            json.dumps(ast.encode_canonical(result.normalized_claim), indent=2, sort_keys=True)
+            + "\n",
+            encoding="utf-8",
         )
-    return ExportVerified(artifact, "kernel", process.stdout)
+        (staging / "certificate.json").write_text(
+            json.dumps(
+                {
+                    "claim_id": claim_id,
+                    "certificates": [
+                        {
+                            "schema_version": item.schema_version,
+                            "payload_digest": item.payload_digest,
+                            "checker": item.checker,
+                            "verifier": item.verifier,
+                            "verification_route": item.verification_route,
+                            "payload": _jsonable(item.canonical_payload),
+                        }
+                        for item in replay
+                    ],
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        (staging / "provenance.json").write_text(
+            json.dumps(_jsonable(asdict(provenance)), indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        (staging / "README.md").write_text(
+            "# LeanCert exported claim\n\n"
+            "This project replays the fixed bound checker input retained by the Python SDK.\n\n"
+            "```bash\nlake update\nlake build\n```\n",
+            encoding="utf-8",
+        )
+        if verify:
+            lake = shutil.which("lake")
+            if lake is None:
+                return ExportDependencyUnavailable("lake is not available on PATH")
+            try:
+                process = subprocess.run(
+                    [lake, "build", "LeanCertExport"],
+                    cwd=staging,
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    timeout=900,
+                    check=False,
+                )
+            except subprocess.TimeoutExpired as exc:
+                output_text = exc.stdout or ""
+                if isinstance(output_text, bytes):
+                    output_text = output_text.decode(errors="replace")
+                return ExportResourceLimit(
+                    artifact,
+                    "kernel replay exceeded the export time limit",
+                    900,
+                    output_text,
+                )
+            if process.returncode != 0:
+                return ExportVerificationMismatch(
+                    artifact, "exported project did not kernel-check", process.stdout
+                )
+        staging.rename(output)
+        staging = output
+        if not verify:
+            return ExportPrepared(artifact)
+        return ExportVerified(artifact, "kernel", process.stdout)
+    finally:
+        if staging != output and staging.exists():
+            shutil.rmtree(staging)
 
 
 __all__ = ["export_verified_bound"]

@@ -28,8 +28,11 @@ The typed line-protocol negotiation and checked-response invariants are
 documented in [Python protocol model v2](docs/protocol-v2.md).
 The semantic claim front door is documented in
 [Unified checked proving](docs/prove.md).
-Verified bounds from Bridge Contract 2.1 can also be exported as
+Verified bounds from Bridge Contract 2.1+ can also be exported as
 [independently rebuildable Lean evidence](docs/export.md).
+
+After installation, `leancert doctor` checks the bundled binary, negotiated
+contract, replay support, adaptive checked route, and release provenance.
 
 ## Quick Start
 
@@ -112,9 +115,11 @@ milestone rather than an implicit claim of this runtime API.
 
 `Verified`, `Rejected`, `Unsupported`, `DomainObstruction`, and `Inconclusive`
 are distinct outcomes. An enclosure that is too wide produces `Inconclusive`;
-failure to find a counterexample is never reported as proof. Adaptive
-optimization remains discovery-only in this SDK until its typed bridge
-certificate route is released and pinned.
+failure to find a counterexample is never reported as proof. Bridge Contract
+2.2 provides a separate typed adaptive certificate route backed by LeanCert's
+checked rational optimizer. It can close subdivision leaves that the fixed
+replayable checker cannot, but is not mislabeled as a replayable `bound-check/2`
+certificate.
 
 ## Links
 

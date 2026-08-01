@@ -97,6 +97,14 @@ class ExportDependencyUnavailable:
 
 
 @dataclass(frozen=True)
+class ExportResourceLimit:
+    artifact: LeanProjectArtifact
+    reason: str
+    timeout_seconds: float
+    build_output: str = ""
+
+
+@dataclass(frozen=True)
 class ExportVerificationMismatch:
     artifact: LeanProjectArtifact
     reason: str

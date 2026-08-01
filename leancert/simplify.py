@@ -143,6 +143,10 @@ def _simplify_recursive(expr: Expr) -> Expr:
         # x / 1 -> x
         if isinstance(e2, Const) and e2.value == 1:
             return e1
+        # Keep rational scaling in LeanCert's globally optimizable core
+        # fragment instead of introducing a derived inverse node.
+        if isinstance(e2, Const) and e2.value != 0:
+            return _simplify_recursive(Mul(e1, const(1 / e2.value)))
         # x / x -> 1 (when x != 0, which we assume)
         if _expr_equal(e1, e2):
             return const(1)

@@ -1,4 +1,4 @@
-# LeanCert bridge contract 2.0
+# LeanCert bridge contract 2.x
 
 The Python SDK and `leancert-bridge` negotiate a typed, capability-driven
 contract before any checked operation is sent. The wire format is a custom
@@ -42,6 +42,16 @@ This validation does not prove the bound a second time. It ensures Python does
 not misrepresent the checked result, authority, or provenance reported by the
 bridge.
 
+Contract 2.1 adds the resolved Lean toolchain and exact LeanCert source
+revision, together with replayable `bound-check/2` payloads. Contract 2.2 adds
+the typed `verify_adaptive` capability. Its successful outcomes retain the
+checked rational optimizer, corresponding correctness theorem, exact request,
+configuration, and candidate enclosure under `adaptive-bound-check/1`.
+
+The two certificate families are intentionally distinct: adaptive evidence may
+close checked subdivision leaves, while only `bound-check/2` currently supports
+standalone project export.
+
 Golden fixtures live under
-`leancert/tests/fixtures/bridge-contract-{1.1,2.0}`. Contract 2.0 fixtures are
+`leancert/tests/fixtures/bridge-contract-{1.1,2.0,2.1}`. Contract fixtures are
 mirrored by the bridge repository's executable contract tests.

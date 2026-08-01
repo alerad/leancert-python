@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from copy import deepcopy
 from pathlib import Path
 
@@ -68,6 +69,27 @@ def test_verified_result_retains_replay_identity_and_exports_project(tmp_path):
     ).read_text()
 
 
+def test_exported_text_files_are_utf8_on_locale_constrained_platforms(
+    tmp_path, monkeypatch
+):
+    x = ast.var("x")
+    result = lc.prove(x <= 1, where={x: (0, 1)}, client=ReplayClient((response(),)))
+    original = Path.write_text
+    encodings = []
+
+    def require_utf8(path, data, *args, **kwargs):
+        encoding = kwargs.get("encoding")
+        encodings.append(encoding)
+        if encoding != "utf-8":
+            raise UnicodeEncodeError("cp1252", "ℚ", 0, 1, "not representable")
+        return original(path, data, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "write_text", require_utf8)
+    exported = result.export_lean_project(str(tmp_path / "proof"), verify=False)
+    assert isinstance(exported, lc.ExportPrepared)
+    assert encodings and set(encodings) == {"utf-8"}
+
+
 def test_two_sided_export_replays_each_checked_direction(tmp_path):
     x = ast.var("x")
     result = lc.prove(
@@ -125,4 +147,40 @@ def test_export_verification_builds_the_explicit_lean_target(tmp_path, monkeypat
     exported = result.export_lean_project(str(tmp_path / "proof"))
     assert isinstance(exported, lc.ExportVerified)
     assert observed["command"] == ["/toolchain/lake", "build", "LeanCertExport"]
-    assert observed["cwd"] == (tmp_path / "proof").resolve()
+    assert observed["cwd"].parent == tmp_path.resolve()
+    assert observed["cwd"].name.startswith(".proof.")
+    assert (tmp_path / "proof").is_dir()
+
+
+def test_failed_export_is_atomic(tmp_path, monkeypatch):
+    x = ast.var("x")
+    result = lc.prove(x <= 1, where={x: (0, 1)}, client=ReplayClient((response(),)))
+    monkeypatch.setattr("leancert.export.shutil.which", lambda name: "/toolchain/lake")
+    monkeypatch.setattr(
+        "leancert.export.subprocess.run",
+        lambda *args, **kwargs: type(
+            "Completed", (), {"returncode": 1, "stdout": "bad certificate"}
+        )(),
+    )
+
+    exported = result.export_lean_project(str(tmp_path / "proof"))
+    assert isinstance(exported, lc.ExportVerificationMismatch)
+    assert not (tmp_path / "proof").exists()
+    assert not list(tmp_path.glob(".proof.*"))
+
+
+def test_export_timeout_is_typed_and_atomic(tmp_path, monkeypatch):
+    x = ast.var("x")
+    result = lc.prove(x <= 1, where={x: (0, 1)}, client=ReplayClient((response(),)))
+    monkeypatch.setattr("leancert.export.shutil.which", lambda name: "/toolchain/lake")
+
+    def timeout(*args, **kwargs):
+        raise subprocess.TimeoutExpired(args[0], kwargs["timeout"], output="still building")
+
+    monkeypatch.setattr("leancert.export.subprocess.run", timeout)
+    exported = result.export_lean_project(str(tmp_path / "proof"))
+    assert isinstance(exported, lc.ExportResourceLimit)
+    assert exported.timeout_seconds == 900
+    assert exported.build_output == "still building"
+    assert not (tmp_path / "proof").exists()
+    assert not list(tmp_path.glob(".proof.*"))

@@ -8,6 +8,7 @@ import pytest
 
 from leancert.exceptions import ProtocolViolation
 from leancert.protocol import (
+    AdaptiveOperationOutcome,
     BoundOperationOutcome,
     BridgeHandshake,
     OutcomeStatus,
@@ -35,6 +36,31 @@ def replay_handshake() -> dict:
 
 def replay_bound() -> dict:
     return _fixture("verified-bound.json", "bridge-contract-2.1")
+
+
+def adaptive_bound() -> dict:
+    return {
+        "verified": True,
+        "status": "verified",
+        "direction": "upper",
+        "backend": "rational_checked_global_optimization",
+        "enclosure": {"lo": {"n": 0, "d": 1}, "hi": {"n": 1, "d": 4}},
+        "certificate": {
+            "schema_version": "adaptive-bound-check/1",
+            "checker": "LeanCert.Engine.Optimization.globalMaximizeRationalChecked",
+            "verifier": (
+                "LeanCert.Engine.Optimization.globalMaximizeRationalChecked_hi_correct"
+            ),
+            "verification_route": "compiled_checker",
+            "payload": {
+                "schema_version": "checked-global-opt-bound/1",
+                "direction": "upper",
+                "candidate_enclosure": {
+                    "lo": {"n": 0, "d": 1}, "hi": {"n": 1, "d": 4}
+                },
+            },
+        },
+    }
 
 
 def test_semantic_versions_are_canonical_and_major_checked():
@@ -126,6 +152,17 @@ def test_contract_2_1_retains_resolved_dependencies_and_replay_payload():
     assert nested_payload is not None
     with pytest.raises(TypeError):
         nested_payload.expression["e"]["idx"] = 1
+
+
+def test_adaptive_outcome_requires_checked_optimizer_authority():
+    outcome = AdaptiveOperationOutcome.parse(
+        adaptive_bound(), expected_direction="upper"
+    )
+    assert outcome.status is OutcomeStatus.VERIFIED
+    tampered = adaptive_bound()
+    tampered["certificate"]["verifier"] = "Untrusted.claim"
+    with pytest.raises(ProtocolViolation, match="authority"):
+        AdaptiveOperationOutcome.parse(tampered, expected_direction="upper")
 
 
 @pytest.mark.parametrize(

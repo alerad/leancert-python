@@ -97,6 +97,7 @@ from .result import (
     ExportVerified,
     ExportUnsupported,
     ExportDependencyUnavailable,
+    ExportResourceLimit,
     ExportVerificationMismatch,
 )
 
@@ -144,6 +145,7 @@ from .proving import ProveConfig, prove
 
 # Client (for advanced users)
 from .client import LeanClient
+from .doctor import DoctorCheck, DoctorReport, diagnose
 
 # Simplification utilities
 from .simplify import simplify, expand
@@ -259,6 +261,15 @@ __all__ = [
     "Inconclusive",
     "Unsupported",
     "DomainObstruction",
+    "ReplayableBoundCertificate",
+    "ReplayBoundConfig",
+    "LeanProjectArtifact",
+    "ExportPrepared",
+    "ExportVerified",
+    "ExportUnsupported",
+    "ExportDependencyUnavailable",
+    "ExportResourceLimit",
+    "ExportVerificationMismatch",
     # Adaptive verification (CEGAR)
     "AdaptiveResult",
     "AdaptiveConfig",
@@ -281,6 +292,9 @@ __all__ = [
     "verify_nn_bounds",
     # Client
     "LeanClient",
+    "DoctorCheck",
+    "DoctorReport",
+    "diagnose",
     # Simplification
     "simplify",
     "expand",

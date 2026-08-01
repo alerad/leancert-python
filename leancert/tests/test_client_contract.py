@@ -1,6 +1,7 @@
 """Bridge response validation without launching a bridge process."""
 
 import io
+import os
 import threading
 
 import pytest
@@ -74,6 +75,28 @@ def test_unadvertised_operation_is_rejected_before_write():
         client.eval_interval({}, [])
 
     assert client._process.stdin.getvalue() == ""
+
+
+def test_binary_discovery_does_not_implicitly_use_sibling_checkout(tmp_path, monkeypatch):
+    package = tmp_path / "python" / "leancert"
+    package.mkdir(parents=True)
+    sibling = tmp_path / "python" / "leancert-bridge" / ".lake" / "build" / "bin"
+    sibling.mkdir(parents=True)
+    (sibling / "lean_bridge").write_text("development binary")
+    monkeypatch.setattr("leancert.client.__file__", str(package / "client.py"))
+    monkeypatch.chdir(tmp_path / "python")
+    monkeypatch.delenv("LEANCERT_BRIDGE_PATH", raising=False)
+    monkeypatch.setattr("leancert.client.shutil.which", lambda name: None)
+
+    with pytest.raises(FileNotFoundError):
+        LeanClient()
+
+
+def test_explicit_environment_bridge_remains_supported(tmp_path, monkeypatch):
+    binary = tmp_path / "lean_bridge"
+    binary.write_text("explicit binary")
+    monkeypatch.setenv("LEANCERT_BRIDGE_PATH", os.fspath(binary))
+    assert LeanClient().binary_path == os.fspath(binary)
 
 
 @pytest.mark.parametrize("missing", ["verified", "computed_lo", "computed_hi"])

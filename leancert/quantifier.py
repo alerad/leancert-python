@@ -205,14 +205,16 @@ class QuantifierSynthesizer:
                 delta = float(result.max_bound.hi) * margin
 
             # Verify the bound actually works
-            if abs_bound:
-                from .expr import abs as expr_abs
-                verify_expr = expr_abs(expr)
-            else:
-                verify_expr = expr
-
+            # |f| ≤ δ is exactly the conjunction -δ ≤ f ∧ f ≤ δ.  Keeping
+            # the two inequalities explicit avoids lowering ``abs`` through a
+            # square-root expression that is outside the differentiable
+            # global-optimization fragment.
             bound_check = self.solver.verify_bound(
-                verify_expr, domain, upper=delta, config=self.config
+                expr,
+                domain,
+                upper=delta,
+                lower=-delta if abs_bound else None,
+                config=self.config,
             )
             if not isinstance(bound_check, Verified):
                 return QuantifierResult(
