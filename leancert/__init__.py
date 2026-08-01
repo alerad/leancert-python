@@ -99,6 +99,12 @@ from .result import (
     ExportDependencyUnavailable,
     ExportResourceLimit,
     ExportVerificationMismatch,
+    KrawczykSearchEvidence,
+    ReplayableKrawczykCertificate,
+    SystemRootResult,
+    VerifiedSystemRoot,
+    CandidateRejected,
+    UnsupportedSystemRoot,
 )
 
 # Adaptive verification (CEGAR)
@@ -141,7 +147,7 @@ from .solver import (
 )
 
 # Unified semantic-claim proving API
-from .proving import ProveConfig, prove
+from .proving import KrawczykCandidate, ProveConfig, SystemRootConfig, prove
 
 # Client (for advanced users)
 from .client import LeanClient

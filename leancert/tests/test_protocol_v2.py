@@ -85,7 +85,14 @@ def test_typed_handshake_retains_capability_identity():
     assert not handshake.supports("integrate")
     capability = handshake.capability("check_bound")
     assert capability is not None
-    assert capability.outcomes == frozenset(OutcomeStatus)
+    assert capability.outcomes == frozenset(
+        {
+            OutcomeStatus.VERIFIED,
+            OutcomeStatus.INCONCLUSIVE,
+            OutcomeStatus.UNSUPPORTED,
+            OutcomeStatus.DOMAIN_OBSTRUCTION,
+        }
+    )
     assert capability.backends == frozenset({"rational_global_optimization"})
     assert capability.request_schema == "check-bound-request/1"
     assert capability.result_schema == "bound-outcome/1"

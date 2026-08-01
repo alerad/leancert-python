@@ -21,6 +21,15 @@ from typing import Any, Literal, Optional
 from .domain import Interval
 
 
+class ProofResult:
+    """Marker base for every typed outcome returned by :func:`leancert.prove`."""
+
+    def __bool__(self) -> bool:
+        raise TypeError(
+            "Proof outcomes have no truth value; inspect their concrete result type"
+        )
+
+
 @dataclass(frozen=True)
 class BridgeProvenance:
     """Exact negotiated environment that performed a checked operation."""
@@ -144,7 +153,7 @@ class CheckedCounterexample(CandidateCounterexample):
 
 
 @dataclass(frozen=True)
-class BoundCheck:
+class BoundCheck(ProofResult):
     """Typed checked outcome, retained as the legacy bound-result name."""
 
     expression: Any
@@ -212,9 +221,66 @@ class DomainObstruction(BoundCheck):
     reason: str
 
 
-# Public semantic name for the unified API. The alias preserves isinstance
-# compatibility for callers already using BoundCheck.
-ProofResult = BoundCheck
+@dataclass(frozen=True)
+class KrawczykSearchEvidence:
+    source: Literal["automatic", "provided"]
+    attempts: int
+    refinements: int
+    contraction_bound: Fraction
+    failure: Mapping[str, Any] | None = None
+
+
+@dataclass(frozen=True)
+class ReplayableKrawczykCertificate:
+    schema_version: str
+    payload_schema: str
+    checker: str
+    verifier: str
+    verification_route: str
+    payload_digest: str
+    system: tuple[Mapping[str, Any], ...]
+    box: tuple[Interval, ...]
+    center: tuple[Fraction, ...]
+    preconditioner: tuple[tuple[Fraction, ...], ...]
+    taylor_depth: int
+    canonical_payload: Mapping[str, Any]
+
+
+@dataclass(frozen=True)
+class SystemRootResult(ProofResult):
+    equations: tuple[Any, ...]
+    variables: tuple[Any, ...]
+    domain: Any
+    provenance: BridgeProvenance
+    search: KrawczykSearchEvidence
+    original_claim: Any | None = field(default=None, kw_only=True)
+    normalized_claim: Any | None = field(default=None, kw_only=True)
+    claim_id: Any | None = field(default=None, kw_only=True)
+
+
+@dataclass(frozen=True)
+class VerifiedSystemRoot(SystemRootResult):
+    """A fixed Krawczyk checker certified exactly one root in the box."""
+
+    certificate: ReplayableKrawczykCertificate
+
+    def export_lean_project(self, path: str, *, verify: bool = True):
+        """Export and optionally kernel-check the fixed Krawczyk certificate."""
+        from .export import export_verified_system_root
+
+        return export_verified_system_root(self, path, verify=verify)
+
+
+@dataclass(frozen=True)
+class CandidateRejected(SystemRootResult):
+    """A well-formed untrusted Krawczyk candidate failed to certify the claim."""
+
+    reason: str
+
+
+@dataclass(frozen=True)
+class UnsupportedSystemRoot(SystemRootResult):
+    reason: str
 
 
 @dataclass

@@ -1,5 +1,9 @@
 """Checked operation implementations used by the unified proving front door."""
 
 from .bounds import BoundPlan, execute_bound_plan, plan_bound_claim
+from .system_roots import SystemRootPlan, execute_system_root_plan
 
-__all__ = ["BoundPlan", "execute_bound_plan", "plan_bound_claim"]
+__all__ = [
+    "BoundPlan", "SystemRootPlan", "execute_bound_plan", "execute_system_root_plan",
+    "plan_bound_claim",
+]

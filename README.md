@@ -30,6 +30,9 @@ The semantic claim front door is documented in
 [Unified checked proving](docs/prove.md).
 Verified bounds from Bridge Contract 2.1+ can also be exported as
 [independently rebuildable Lean evidence](docs/export.md).
+Bridge Contract 2.3 extends the same workflow to unique nonlinear-system roots
+certified by exact rational Krawczyk certificates; NumPy and SciPy candidates
+remain untrusted inputs.
 
 After installation, `leancert doctor` checks the bundled binary, negotiated
 contract, replay support, adaptive checked route, and release provenance.

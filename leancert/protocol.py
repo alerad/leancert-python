@@ -73,6 +73,7 @@ class OutcomeStatus(str, Enum):
     INCONCLUSIVE = "inconclusive"
     UNSUPPORTED = "unsupported"
     DOMAIN_OBSTRUCTION = "domain_obstruction"
+    CANDIDATE_REJECTED = "candidate_rejected"
 
 
 @dataclass(frozen=True, slots=True)
@@ -318,6 +319,26 @@ class BridgeHandshake:
                 raise ProtocolViolation("adaptive certificate schema was not advertised")
             if "compiled_checker" not in capability.verification_routes:
                 raise ProtocolViolation("adaptive verification route was not advertised")
+        return outcome
+
+    def parse_system_root_outcome(self, value: Any) -> SystemRootOperationOutcome:
+        capability = self.capability("check_unique_system_root")
+        if capability is None:
+            raise ProtocolViolation(
+                "bridge returned a system-root outcome without check_unique_system_root capability"
+            )
+        outcome = SystemRootOperationOutcome.parse(value)
+        if outcome.status not in capability.outcomes:
+            raise ProtocolViolation("system-root status was not advertised")
+        if outcome.backend not in capability.backends:
+            raise ProtocolViolation("system-root backend was not advertised")
+        if outcome.certificate is not None:
+            if outcome.certificate.schema_version not in capability.certificate_schemas:
+                raise ProtocolViolation("Krawczyk certificate schema was not advertised")
+            if outcome.certificate.verification_route not in capability.verification_routes:
+                raise ProtocolViolation("Krawczyk verification route was not advertised")
+            if outcome.certificate.schema_version not in self.certificate_schemas:
+                raise ProtocolViolation("Krawczyk certificate schema is absent from handshake")
         return outcome
 
     @classmethod
@@ -808,5 +829,199 @@ class AdaptiveOperationOutcome:
             backend,
             enclosure,
             None if certificate is None else _freeze_json(certificate),
+            MappingProxyType(dict(obj)),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ReplayKrawczykPayload:
+    system: tuple[Mapping[str, Any], ...]
+    box: tuple[WireEnclosure, ...]
+    center: tuple[WireRational, ...]
+    preconditioner: tuple[tuple[WireRational, ...], ...]
+    taylor_depth: int
+    canonical: Mapping[str, Any]
+
+    @classmethod
+    def parse(cls, value: Any) -> ReplayKrawczykPayload:
+        obj = _object(value, "Krawczyk certificate payload")
+        if set(obj) != {
+            "schema_version", "system", "box", "center", "preconditioner", "config"
+        } or obj.get("schema_version") != "checked-unique-system-root/1":
+            raise ProtocolViolation(
+                "Krawczyk payload fields do not match checked-unique-system-root/1"
+            )
+        if not isinstance(obj["system"], list) or not obj["system"]:
+            raise ProtocolViolation("Krawczyk payload system must be a non-empty array")
+        system = tuple(
+            _freeze_json(_canonical_core_expression(expression, f"system[{index}]"))
+            for index, expression in enumerate(obj["system"])
+        )
+        dimension = len(system)
+        if not isinstance(obj["box"], list) or len(obj["box"]) != dimension:
+            raise ProtocolViolation("Krawczyk payload box dimension must match the system")
+        box = tuple(
+            WireEnclosure.parse(interval, f"box[{index}]")
+            for index, interval in enumerate(obj["box"])
+        )
+        if not isinstance(obj["center"], list) or len(obj["center"]) != dimension:
+            raise ProtocolViolation("Krawczyk payload center dimension must match the system")
+        center = tuple(
+            _canonical_wire_rational(value, f"center[{index}]")
+            for index, value in enumerate(obj["center"])
+        )
+        if not isinstance(obj["preconditioner"], list) or len(
+            obj["preconditioner"]
+        ) != dimension:
+            raise ProtocolViolation("Krawczyk preconditioner must be square")
+        matrix: list[tuple[WireRational, ...]] = []
+        for row_index, row in enumerate(obj["preconditioner"]):
+            if not isinstance(row, list) or len(row) != dimension:
+                raise ProtocolViolation("Krawczyk preconditioner must be square")
+            matrix.append(
+                tuple(
+                    _canonical_wire_rational(value, f"preconditioner[{row_index}][{column}]")
+                    for column, value in enumerate(row)
+                )
+            )
+        config = _object(obj["config"], "Krawczyk payload config")
+        if set(config) != {"taylor_depth"}:
+            raise ProtocolViolation("Krawczyk payload config fields are not canonical")
+        depth = config["taylor_depth"]
+        if isinstance(depth, bool) or not isinstance(depth, int) or depth < 0:
+            raise ProtocolViolation("Krawczyk Taylor depth must be a natural number")
+        canonical = {
+            "schema_version": "checked-unique-system-root/1",
+            "system": [_plain_json(item) for item in system],
+            "box": obj["box"],
+            "center": obj["center"],
+            "preconditioner": obj["preconditioner"],
+            "config": {"taylor_depth": depth},
+        }
+        return cls(system, box, center, tuple(matrix), depth, _freeze_json(canonical))
+
+    @property
+    def digest(self) -> str:
+        encoded = json.dumps(
+            _plain_json(self.canonical), sort_keys=True, separators=(",", ":")
+        ).encode()
+        return "sha256:" + hashlib.sha256(encoded).hexdigest()
+
+
+@dataclass(frozen=True, slots=True)
+class KrawczykCertificateDescriptor:
+    schema_version: str
+    checker: str
+    verifier: str
+    verification_route: str
+    payload: ReplayKrawczykPayload
+
+    @classmethod
+    def parse(cls, value: Any) -> KrawczykCertificateDescriptor:
+        obj = _object(value, "Krawczyk certificate")
+        if set(obj) != {
+            "schema_version", "checker", "verifier", "verification_route", "payload"
+        }:
+            raise ProtocolViolation("Krawczyk certificate fields are not canonical")
+        if obj["schema_version"] != "krawczyk-check/1":
+            raise ProtocolViolation("Krawczyk certificate schema is unsupported")
+        if obj["checker"] != "LeanCert.Engine.krawczykCheck":
+            raise ProtocolViolation("Krawczyk checker authority is not recognized")
+        if obj["verifier"] != "LeanCert.Validity.verify_unique_system_root":
+            raise ProtocolViolation("Krawczyk verifier authority is not recognized")
+        if obj["verification_route"] != "compiled_checker":
+            raise ProtocolViolation("Krawczyk verification route is unsupported")
+        return cls(
+            obj["schema_version"],
+            obj["checker"],
+            obj["verifier"],
+            obj["verification_route"],
+            ReplayKrawczykPayload.parse(obj["payload"]),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class SystemRootSearchOutcome:
+    source: str
+    attempts: int
+    refinements: int
+    contraction_bound: WireRational
+    failure: Mapping[str, Any] | None
+
+
+@dataclass(frozen=True, slots=True)
+class SystemRootOperationOutcome:
+    status: OutcomeStatus
+    backend: str
+    root_box: tuple[WireEnclosure, ...]
+    search: SystemRootSearchOutcome
+    certificate: KrawczykCertificateDescriptor | None
+    raw: Mapping[str, Any]
+
+    @classmethod
+    def parse(cls, value: Any) -> SystemRootOperationOutcome:
+        obj = _object(value, "check_unique_system_root result")
+        required = {"verified", "status", "backend", "root_box", "search", "certificate"}
+        if set(obj) != required:
+            raise ProtocolViolation("system-root outcome fields are not canonical")
+        if not isinstance(obj["verified"], bool):
+            raise ProtocolViolation("system-root verified flag must be boolean")
+        try:
+            status = OutcomeStatus(obj["status"])
+        except (TypeError, ValueError) as exc:
+            raise ProtocolViolation("system-root status is unknown") from exc
+        if status not in {
+            OutcomeStatus.VERIFIED, OutcomeStatus.CANDIDATE_REJECTED, OutcomeStatus.UNSUPPORTED
+        }:
+            raise ProtocolViolation("system-root status is invalid for this operation")
+        if obj["verified"] != (status is OutcomeStatus.VERIFIED):
+            raise ProtocolViolation("system-root verified flag contradicts status")
+        backend = _string(obj["backend"], "system-root backend")
+        if not isinstance(obj["root_box"], list) or not obj["root_box"]:
+            raise ProtocolViolation("system-root box must be a non-empty array")
+        root_box = tuple(
+            WireEnclosure.parse(item, f"root_box[{index}]")
+            for index, item in enumerate(obj["root_box"])
+        )
+        search_obj = _object(obj["search"], "system-root search")
+        if set(search_obj) != {
+            "source", "attempts", "refinements", "contraction_bound", "failure"
+        }:
+            raise ProtocolViolation("system-root search fields are not canonical")
+        source = _string(search_obj["source"], "system-root search source")
+        if source not in {"automatic", "provided"}:
+            raise ProtocolViolation("system-root search source is unknown")
+        attempts, refinements = search_obj["attempts"], search_obj["refinements"]
+        if any(
+            isinstance(item, bool) or not isinstance(item, int) or item < 0
+            for item in (attempts, refinements)
+        ):
+            raise ProtocolViolation("system-root search counts must be natural numbers")
+        contraction = _canonical_wire_rational(
+            search_obj["contraction_bound"], "system-root contraction bound"
+        )
+        failure = search_obj["failure"]
+        if failure is not None:
+            failure = _freeze_json(_object(failure, "system-root failure"))
+        certificate = (
+            None
+            if obj["certificate"] is None
+            else KrawczykCertificateDescriptor.parse(obj["certificate"])
+        )
+        if (status is OutcomeStatus.VERIFIED) != (certificate is not None):
+            raise ProtocolViolation("only verified system-root outcomes may retain a certificate")
+        if certificate is not None:
+            payload = certificate.payload
+            if payload.box != root_box:
+                raise ProtocolViolation("Krawczyk payload box contradicts the outcome")
+            if len(payload.system) != len(root_box):
+                raise ProtocolViolation("Krawczyk payload dimension contradicts the outcome")
+        assert backend is not None and source is not None
+        return cls(
+            status,
+            backend,
+            root_box,
+            SystemRootSearchOutcome(source, attempts, refinements, contraction, failure),
+            certificate,
             MappingProxyType(dict(obj)),
         )
