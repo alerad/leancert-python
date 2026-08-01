@@ -37,3 +37,8 @@ Contract 2.3 `VerifiedSystemRoot` outcomes retain a complete
 exact `KrawczykCert`, kernel-reduces `krawczykCheck`, applies
 `verify_unique_system_root`, and pins the resulting theorem with
 `#assert_trust kernel`.
+
+Contract 2.4 `VerifiedEventualBound` outcomes export the retained fixed cutoff,
+not the discovery procedure. The project kernel-reduces
+`checkReciprocalPowerUpper`, applies `verify_reciprocal_power_upper`, and uses
+`#assert_trust kernel` on the theorem for the complete natural-number tail.

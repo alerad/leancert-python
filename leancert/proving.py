@@ -11,6 +11,11 @@ from numbers import Real
 from . import ast
 from .client import LeanClient
 from .operations.bounds import execute_bound_plan, try_plan_bound_claim, unsupported_result
+from .operations.eventual import (
+    execute_eventual_plan,
+    try_plan_eventual_claim,
+    unsupported_eventual,
+)
 from .operations.system_roots import (
     SystemRootPlan,
     execute_system_root_plan,
@@ -106,6 +111,19 @@ class SystemRootConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class EventualConfig:
+    max_checks: int = 1000
+
+    def __post_init__(self) -> None:
+        if (
+            isinstance(self.max_checks, bool)
+            or not isinstance(self.max_checks, int)
+            or self.max_checks <= 0
+        ):
+            raise ValueError("max_checks must be a positive integer")
+
+
+@dataclass(frozen=True, slots=True)
 class ProveConfig:
     """Effort controls for checked claim execution.
 
@@ -116,6 +134,7 @@ class ProveConfig:
 
     taylor_depth: int = 10
     system_root: SystemRootConfig = field(default_factory=SystemRootConfig)
+    eventual: EventualConfig = field(default_factory=EventualConfig)
 
     def __post_init__(self) -> None:
         if (
@@ -126,6 +145,8 @@ class ProveConfig:
             raise ValueError("taylor_depth must be a non-negative integer")
         if not isinstance(self.system_root, SystemRootConfig):
             raise TypeError("system_root must be a SystemRootConfig")
+        if not isinstance(self.eventual, EventualConfig):
+            raise TypeError("eventual must be an EventualConfig")
 
 
 def prove(
@@ -174,6 +195,31 @@ def prove(
         finally:
             if owns_client:
                 active_client.close()
+    if isinstance(normalized_claim, ast.EventualClaim):
+        plan, unsupported_reason = try_plan_eventual_claim(normalized_claim)
+        if plan is None:
+            assert unsupported_reason is not None
+            return unsupported_eventual(
+                normalized_claim,
+                original_claim=claim,
+                normalized_claim=normalized_claim,
+                claim_id=claim_id,
+                reason=unsupported_reason,
+            )
+        owns_client = client is None
+        active_client = LeanClient() if client is None else client
+        try:
+            return execute_eventual_plan(
+                plan,
+                original_claim=claim,
+                normalized_claim=normalized_claim,
+                claim_id=claim_id,
+                client=active_client,
+                max_checks=config.eventual.max_checks,
+            )
+        finally:
+            if owns_client:
+                active_client.close()
     plan, unsupported_reason = try_plan_bound_claim(normalized_claim)
     if plan is None:
         assert unsupported_reason is not None
@@ -195,4 +241,10 @@ def prove(
             active_client.close()
 
 
-__all__ = ["KrawczykCandidate", "ProveConfig", "SystemRootConfig", "prove"]
+__all__ = [
+    "EventualConfig",
+    "KrawczykCandidate",
+    "ProveConfig",
+    "SystemRootConfig",
+    "prove",
+]

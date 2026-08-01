@@ -22,8 +22,10 @@ from .result import (
     ExportVerified,
     LeanProjectArtifact,
     ReplayableBoundCertificate,
+    ReplayableEventualCertificate,
     ReplayableKrawczykCertificate,
     Verified,
+    VerifiedEventualBound,
     VerifiedSystemRoot,
 )
 
@@ -43,8 +45,21 @@ def _core_expression(node: Any) -> str:
     if kind in {"add", "mul"}:
         return f"(.{kind} {_core_expression(node['e1'])} {_core_expression(node['e2'])})"
     if kind in {
-        "neg", "inv", "sin", "cos", "exp", "log", "sqrt", "atan", "arsinh",
-        "atanh", "sinc", "erf", "sinh", "cosh", "tanh",
+        "neg",
+        "inv",
+        "sin",
+        "cos",
+        "exp",
+        "log",
+        "sqrt",
+        "atan",
+        "arsinh",
+        "atanh",
+        "sinc",
+        "erf",
+        "sinh",
+        "cosh",
+        "tanh",
     }:
         return f"(.{kind} {_core_expression(node['e'])})"
     if kind == "named_const":
@@ -61,23 +76,14 @@ def _support_proof(node: Any) -> str:
     if kind == "var":
         return f"(ADSupported.var {node['idx']})"
     if kind in {"add", "mul"}:
-        return (
-            f"(ADSupported.{kind} {_support_proof(node['e1'])} "
-            f"{_support_proof(node['e2'])})"
-        )
+        return f"(ADSupported.{kind} {_support_proof(node['e1'])} {_support_proof(node['e2'])})"
     if kind in {"neg", "sin", "cos", "exp"}:
         return f"(ADSupported.{kind} {_support_proof(node['e'])})"
     raise ValueError(f"core expression kind {kind!r} has no global-support proof")
 
 
 def _interval(value: Any) -> str:
-    return (
-        "{ lo := "
-        + _rat(value.lo)
-        + ", hi := "
-        + _rat(value.hi)
-        + ", le := by norm_num }"
-    )
+    return "{ lo := " + _rat(value.lo) + ", hi := " + _rat(value.hi) + ", le := by norm_num }"
 
 
 def _render_project(certificates: tuple[ReplayableBoundCertificate, ...]) -> str:
@@ -207,20 +213,16 @@ def export_verified_bound(result: Verified, path: str, *, verify: bool = True):
         'name = "LeanCertExport"\n'
         'version = "0.1.0"\n\n'
         'defaultTargets = ["LeanCertExport"]\n\n'
-        '[[require]]\n'
+        "[[require]]\n"
         'name = "leancert"\n'
         f'git = "{provenance.leancert_source}"\n'
         f'rev = "{provenance.leancert_resolved_revision}"\n\n'
-        '[[lean_lib]]\n'
+        "[[lean_lib]]\n"
         'name = "LeanCertExport"\n'
     )
-    staging = Path(
-        tempfile.mkdtemp(prefix=f".{output.name}.", dir=str(output.parent))
-    ).resolve()
+    staging = Path(tempfile.mkdtemp(prefix=f".{output.name}.", dir=str(output.parent))).resolve()
     try:
-        (staging / "lean-toolchain").write_text(
-            f"{provenance.lean_toolchain}\n", encoding="utf-8"
-        )
+        (staging / "lean-toolchain").write_text(f"{provenance.lean_toolchain}\n", encoding="utf-8")
         (staging / "lakefile.toml").write_text(lakefile, encoding="utf-8")
         (staging / "LeanCertExport.lean").write_text(lean_source, encoding="utf-8")
         (staging / "claim.json").write_text(
@@ -308,10 +310,7 @@ def _render_krawczyk_project(certificate: ReplayableKrawczykCertificate) -> str:
     system = ",\n  ".join(_core_expression(item) for item in certificate.system)
     box = ",\n  ".join(_interval(item) for item in certificate.box)
     center = ", ".join(_rat(item) for item in certificate.center)
-    rows = "; ".join(
-        ", ".join(_rat(item) for item in row)
-        for row in certificate.preconditioner
-    )
+    rows = "; ".join(", ".join(_rat(item) for item in row) for row in certificate.preconditioner)
     return "\n".join(
         [
             "import LeanCert.Validity.Krawczyk",
@@ -353,9 +352,7 @@ def _render_krawczyk_project(certificate: ReplayableKrawczykCertificate) -> str:
     )
 
 
-def export_verified_system_root(
-    result: VerifiedSystemRoot, path: str, *, verify: bool = True
-):
+def export_verified_system_root(result: VerifiedSystemRoot, path: str, *, verify: bool = True):
     """Create a standalone fixed Krawczyk project and optionally kernel-check it."""
     certificate = result.certificate
     provenance = result.provenance
@@ -382,27 +379,21 @@ def export_verified_system_root(
     if output.exists():
         raise FileExistsError(f"export destination already exists: {output}")
     output.parent.mkdir(parents=True, exist_ok=True)
-    artifact = LeanProjectArtifact(
-        str(output), str(result.claim_id), (certificate.payload_digest,)
-    )
+    artifact = LeanProjectArtifact(str(output), str(result.claim_id), (certificate.payload_digest,))
     lakefile = (
         'name = "LeanCertExport"\n'
         'version = "0.1.0"\n\n'
         'defaultTargets = ["LeanCertExport"]\n\n'
-        '[[require]]\n'
+        "[[require]]\n"
         'name = "leancert"\n'
         f'git = "{provenance.leancert_source}"\n'
         f'rev = "{provenance.leancert_resolved_revision}"\n\n'
-        '[[lean_lib]]\n'
+        "[[lean_lib]]\n"
         'name = "LeanCertExport"\n'
     )
-    staging = Path(
-        tempfile.mkdtemp(prefix=f".{output.name}.", dir=str(output.parent))
-    ).resolve()
+    staging = Path(tempfile.mkdtemp(prefix=f".{output.name}.", dir=str(output.parent))).resolve()
     try:
-        (staging / "lean-toolchain").write_text(
-            f"{provenance.lean_toolchain}\n", encoding="utf-8"
-        )
+        (staging / "lean-toolchain").write_text(f"{provenance.lean_toolchain}\n", encoding="utf-8")
         (staging / "lakefile.toml").write_text(lakefile, encoding="utf-8")
         (staging / "LeanCertExport.lean").write_text(lean_source, encoding="utf-8")
         (staging / "claim.json").write_text(
@@ -472,4 +463,156 @@ def export_verified_system_root(
             shutil.rmtree(staging)
 
 
-__all__ = ["export_verified_bound", "export_verified_system_root"]
+def _render_eventual_project(certificate: ReplayableEventualCertificate) -> str:
+    if (
+        certificate.checker != "LeanCert.Validity.checkReciprocalPowerUpper"
+        or certificate.verifier != "LeanCert.Validity.verify_reciprocal_power_upper"
+    ):
+        raise ValueError("certificate authority is not the supported eventual-bound boundary")
+    return "\n".join(
+        [
+            "import LeanCert.Validity.Eventual",
+            "import LeanCert.Tactic.Verification",
+            "",
+            "namespace LeanCertExport",
+            "",
+            "theorem certificate_check :",
+            "    LeanCert.Validity.checkReciprocalPowerUpper",
+            f"      {_rat(certificate.coefficient)} {_rat(certificate.bound)}",
+            f"      {certificate.exponent} {certificate.cutoff} = true := by",
+            "  decide +kernel",
+            "",
+            "theorem exported_claim :",
+            f"    ∀ n : Nat, {certificate.cutoff} ≤ n →",
+            f"      (({_rat(certificate.coefficient)}) : ℝ) / (n : ℝ) ^ {certificate.exponent} ≤",
+            f"        (({_rat(certificate.bound)}) : ℝ) :=",
+            "  LeanCert.Validity.verify_reciprocal_power_upper",
+            f"    {_rat(certificate.coefficient)} {_rat(certificate.bound)}",
+            f"    {certificate.exponent} {certificate.cutoff} certificate_check",
+            "",
+            "#assert_trust kernel exported_claim",
+            "",
+            "end LeanCertExport",
+            "",
+        ]
+    )
+
+
+def export_verified_eventual_bound(
+    result: VerifiedEventualBound, path: str, *, verify: bool = True
+):
+    """Create a standalone fixed-cutoff project and optionally kernel-check it."""
+    certificate = result.certificate
+    provenance = result.provenance
+    if not all(
+        (
+            provenance.lean_toolchain,
+            provenance.leancert_source,
+            provenance.leancert_resolved_revision,
+        )
+    ):
+        return ExportUnsupported("bridge provenance lacks dependency identities")
+    if provenance.leancert_source != "https://github.com/alerad/leancert.git":
+        return ExportUnsupported("export requires the canonical LeanCert repository")
+    assert provenance.leancert_resolved_revision is not None
+    assert provenance.lean_toolchain is not None
+    if re.fullmatch(r"[0-9a-f]{40}", provenance.leancert_resolved_revision) is None:
+        return ExportUnsupported("LeanCert dependency is not pinned to a full Git revision")
+    try:
+        lean_source = _render_eventual_project(certificate)
+    except ValueError as exc:
+        return ExportUnsupported(str(exc))
+
+    output = Path(path).expanduser().resolve()
+    if output.exists():
+        raise FileExistsError(f"export destination already exists: {output}")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    artifact = LeanProjectArtifact(str(output), str(result.claim_id), (certificate.payload_digest,))
+    lakefile = (
+        'name = "LeanCertExport"\n'
+        'version = "0.1.0"\n\n'
+        'defaultTargets = ["LeanCertExport"]\n\n'
+        "[[require]]\n"
+        'name = "leancert"\n'
+        f'git = "{provenance.leancert_source}"\n'
+        f'rev = "{provenance.leancert_resolved_revision}"\n\n'
+        "[[lean_lib]]\n"
+        'name = "LeanCertExport"\n'
+    )
+    staging = Path(tempfile.mkdtemp(prefix=f".{output.name}.", dir=str(output.parent))).resolve()
+    try:
+        (staging / "lean-toolchain").write_text(f"{provenance.lean_toolchain}\n", encoding="utf-8")
+        (staging / "lakefile.toml").write_text(lakefile, encoding="utf-8")
+        (staging / "LeanCertExport.lean").write_text(lean_source, encoding="utf-8")
+        (staging / "claim.json").write_text(
+            json.dumps(ast.encode_canonical(result.normalized_claim), indent=2, sort_keys=True)
+            + "\n",
+            encoding="utf-8",
+        )
+        (staging / "certificate.json").write_text(
+            json.dumps(
+                {
+                    "claim_id": str(result.claim_id),
+                    "schema_version": certificate.schema_version,
+                    "payload_digest": certificate.payload_digest,
+                    "checker": certificate.checker,
+                    "verifier": certificate.verifier,
+                    "verification_route": certificate.verification_route,
+                    "payload": _jsonable(certificate.canonical_payload),
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        (staging / "provenance.json").write_text(
+            json.dumps(_jsonable(asdict(provenance)), indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        (staging / "README.md").write_text(
+            "# LeanCert exported eventual bound\n\n"
+            "This project replays a fixed reciprocal-power cutoff certificate.\n\n"
+            "```bash\nlake update\nlake build\n```\n",
+            encoding="utf-8",
+        )
+        if verify:
+            lake = shutil.which("lake")
+            if lake is None:
+                return ExportDependencyUnavailable("lake is not available on PATH")
+            try:
+                process = subprocess.run(
+                    [lake, "build", "LeanCertExport"],
+                    cwd=staging,
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    timeout=900,
+                    check=False,
+                )
+            except subprocess.TimeoutExpired as exc:
+                output_text = exc.stdout or ""
+                if isinstance(output_text, bytes):
+                    output_text = output_text.decode(errors="replace")
+                return ExportResourceLimit(
+                    artifact, "kernel replay exceeded the export time limit", 900, output_text
+                )
+            if process.returncode != 0:
+                return ExportVerificationMismatch(
+                    artifact, "exported project did not kernel-check", process.stdout
+                )
+        staging.rename(output)
+        staging = output
+        if not verify:
+            return ExportPrepared(artifact)
+        return ExportVerified(artifact, "kernel", process.stdout)
+    finally:
+        if staging != output and staging.exists():
+            shutil.rmtree(staging)
+
+
+__all__ = [
+    "export_verified_bound",
+    "export_verified_eventual_bound",
+    "export_verified_system_root",
+]

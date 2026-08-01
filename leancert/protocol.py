@@ -196,9 +196,7 @@ class ResolvedDependencies:
             raise ProtocolViolation("resolved dependency fields do not match Contract 2.1")
         toolchain = _string(lean["toolchain"], "dependencies.lean.toolchain")
         source = _string(leancert["source"], "dependencies.leancert.source")
-        input_revision = _string(
-            leancert["input_revision"], "dependencies.leancert.input_revision"
-        )
+        input_revision = _string(leancert["input_revision"], "dependencies.leancert.input_revision")
         resolved_revision = _string(
             leancert["resolved_revision"], "dependencies.leancert.resolved_revision"
         )
@@ -265,9 +263,7 @@ class BridgeHandshake:
         encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
         return "sha256:" + hashlib.sha256(encoded).hexdigest()
 
-    def parse_bound_outcome(
-        self, value: Any, *, expected_direction: str
-    ) -> BoundOperationOutcome:
+    def parse_bound_outcome(self, value: Any, *, expected_direction: str) -> BoundOperationOutcome:
         outcome = BoundOperationOutcome.parse(
             value,
             typed_contract=self.typed_contract,
@@ -307,9 +303,7 @@ class BridgeHandshake:
             raise ProtocolViolation(
                 "bridge returned an adaptive outcome without verify_adaptive capability"
             )
-        outcome = AdaptiveOperationOutcome.parse(
-            value, expected_direction=expected_direction
-        )
+        outcome = AdaptiveOperationOutcome.parse(value, expected_direction=expected_direction)
         if outcome.status not in capability.outcomes:
             raise ProtocolViolation("adaptive status was not advertised")
         if outcome.backend not in capability.backends:
@@ -341,6 +335,28 @@ class BridgeHandshake:
                 raise ProtocolViolation("Krawczyk certificate schema is absent from handshake")
         return outcome
 
+    def parse_eventual_outcome(self, value: Any) -> EventualOperationOutcome:
+        capability = self.capability("check_eventual_bound")
+        if capability is None:
+            raise ProtocolViolation(
+                "bridge returned an eventual-bound outcome without check_eventual_bound capability"
+            )
+        outcome = EventualOperationOutcome.parse(value)
+        if outcome.status not in capability.outcomes:
+            raise ProtocolViolation("eventual-bound status was not advertised")
+        if outcome.backend not in capability.backends:
+            raise ProtocolViolation("eventual-bound backend was not advertised")
+        if outcome.certificate is not None:
+            if outcome.certificate.schema_version not in capability.certificate_schemas:
+                raise ProtocolViolation("eventual-bound certificate schema was not advertised")
+            if outcome.certificate.verification_route not in capability.verification_routes:
+                raise ProtocolViolation("eventual-bound verification route was not advertised")
+            if outcome.certificate.schema_version not in self.certificate_schemas:
+                raise ProtocolViolation(
+                    "eventual-bound certificate schema is absent from handshake"
+                )
+        return outcome
+
     @classmethod
     def parse(cls, value: Any) -> BridgeHandshake:
         obj = _object(value, "get_info result")
@@ -356,9 +372,7 @@ class BridgeHandshake:
         protocol = ProtocolVersion.parse(protocol_value, "protocol_version")
         if protocol != api:
             raise ProtocolViolation("protocol_version and bridge_api_version must agree")
-        protocol_name = _string(
-            obj.get("protocol_name"), "protocol_name", optional=api.major < 2
-        )
+        protocol_name = _string(obj.get("protocol_name"), "protocol_name", optional=api.major < 2)
         framing = _string(obj.get("framing"), "framing", optional=api.major < 2)
         if api.major >= 2 and (protocol_name != "leancert-line-json" or framing != "ndjson"):
             raise ProtocolViolation("Contract 2.0 requires leancert-line-json over ndjson")
@@ -532,15 +546,29 @@ def _canonical_core_expression(value: Any, name: str = "certificate.payload.expr
             "e2": _canonical_core_expression(obj["e2"], f"{name}.e2"),
         }
     if kind in {
-        "neg", "inv", "exp", "sin", "cos", "log", "atan", "arsinh",
-        "atanh", "sinc", "erf", "sinh", "cosh", "tanh", "sqrt",
+        "neg",
+        "inv",
+        "exp",
+        "sin",
+        "cos",
+        "log",
+        "atan",
+        "arsinh",
+        "atanh",
+        "sinc",
+        "erf",
+        "sinh",
+        "cosh",
+        "tanh",
+        "sqrt",
     }:
         if set(obj) != {"kind", "e"}:
             raise ProtocolViolation(f"{name} unary fields are not canonical")
         return {"kind": kind, "e": _canonical_core_expression(obj["e"], f"{name}.e")}
     if kind == "named_const":
         if set(obj) != {"kind", "name"} or obj["name"] not in {
-            "pi", "euler_mascheroni",
+            "pi",
+            "euler_mascheroni",
         }:
             raise ProtocolViolation(f"{name} named constant is not canonical")
         return {"kind": kind, "name": obj["name"]}
@@ -580,12 +608,8 @@ class ReplayBoundPayload:
                 raise ProtocolViolation("certificate replay interval fields are not canonical")
             box_items.append(
                 WireEnclosure(
-                    _canonical_wire_rational(
-                        item["lo"], f"certificate.payload.box[{index}].lo"
-                    ),
-                    _canonical_wire_rational(
-                        item["hi"], f"certificate.payload.box[{index}].hi"
-                    ),
+                    _canonical_wire_rational(item["lo"], f"certificate.payload.box[{index}].lo"),
+                    _canonical_wire_rational(item["hi"], f"certificate.payload.box[{index}].hi"),
                 )
             )
         box = tuple(box_items)
@@ -596,13 +620,14 @@ class ReplayBoundPayload:
         if direction not in {"lower", "upper"}:
             raise ProtocolViolation("certificate.payload.direction must be lower or upper")
         config_obj = _object(obj["config"], "certificate.payload.config")
-        if set(config_obj) != {
-            "max_iterations", "tolerance", "use_monotonicity", "taylor_depth"
-        }:
+        if set(config_obj) != {"max_iterations", "tolerance", "use_monotonicity", "taylor_depth"}:
             raise ProtocolViolation("replay configuration fields are not canonical")
         maximum, depth = config_obj["max_iterations"], config_obj["taylor_depth"]
         monotonicity = config_obj["use_monotonicity"]
-        if any(isinstance(item, bool) or not isinstance(item, int) or item < 0 for item in (maximum, depth)):
+        if any(
+            isinstance(item, bool) or not isinstance(item, int) or item < 0
+            for item in (maximum, depth)
+        ):
             raise ProtocolViolation("replay iteration and Taylor limits must be natural numbers")
         if not isinstance(monotonicity, bool):
             raise ProtocolViolation("replay use_monotonicity must be boolean")
@@ -792,7 +817,11 @@ class AdaptiveOperationOutcome:
         if status is OutcomeStatus.VERIFIED:
             cert = _object(certificate, "verify_adaptive.certificate")
             if set(cert) != {
-                "schema_version", "checker", "verifier", "verification_route", "payload"
+                "schema_version",
+                "checker",
+                "verifier",
+                "verification_route",
+                "payload",
             }:
                 raise ProtocolViolation("adaptive certificate fields are not canonical")
             if cert["schema_version"] != "adaptive-bound-check/1":
@@ -816,10 +845,14 @@ class AdaptiveOperationOutcome:
                 raise ProtocolViolation("adaptive certificate payload schema is unsupported")
             if payload.get("direction") != direction:
                 raise ProtocolViolation("adaptive certificate direction contradicts outcome")
-            if enclosure is None or WireEnclosure.parse(
-                payload.get("candidate_enclosure"),
-                "verify_adaptive.certificate.payload.candidate_enclosure",
-            ) != enclosure:
+            if (
+                enclosure is None
+                or WireEnclosure.parse(
+                    payload.get("candidate_enclosure"),
+                    "verify_adaptive.certificate.payload.candidate_enclosure",
+                )
+                != enclosure
+            ):
                 raise ProtocolViolation("adaptive certificate enclosure contradicts outcome")
         elif certificate is not None:
             raise ProtocolViolation("only verified adaptive outcomes may retain a certificate")
@@ -845,9 +878,10 @@ class ReplayKrawczykPayload:
     @classmethod
     def parse(cls, value: Any) -> ReplayKrawczykPayload:
         obj = _object(value, "Krawczyk certificate payload")
-        if set(obj) != {
-            "schema_version", "system", "box", "center", "preconditioner", "config"
-        } or obj.get("schema_version") != "checked-unique-system-root/1":
+        if (
+            set(obj) != {"schema_version", "system", "box", "center", "preconditioner", "config"}
+            or obj.get("schema_version") != "checked-unique-system-root/1"
+        ):
             raise ProtocolViolation(
                 "Krawczyk payload fields do not match checked-unique-system-root/1"
             )
@@ -870,9 +904,7 @@ class ReplayKrawczykPayload:
             _canonical_wire_rational(value, f"center[{index}]")
             for index, value in enumerate(obj["center"])
         )
-        if not isinstance(obj["preconditioner"], list) or len(
-            obj["preconditioner"]
-        ) != dimension:
+        if not isinstance(obj["preconditioner"], list) or len(obj["preconditioner"]) != dimension:
             raise ProtocolViolation("Krawczyk preconditioner must be square")
         matrix: list[tuple[WireRational, ...]] = []
         for row_index, row in enumerate(obj["preconditioner"]):
@@ -919,9 +951,7 @@ class KrawczykCertificateDescriptor:
     @classmethod
     def parse(cls, value: Any) -> KrawczykCertificateDescriptor:
         obj = _object(value, "Krawczyk certificate")
-        if set(obj) != {
-            "schema_version", "checker", "verifier", "verification_route", "payload"
-        }:
+        if set(obj) != {"schema_version", "checker", "verifier", "verification_route", "payload"}:
             raise ProtocolViolation("Krawczyk certificate fields are not canonical")
         if obj["schema_version"] != "krawczyk-check/1":
             raise ProtocolViolation("Krawczyk certificate schema is unsupported")
@@ -971,7 +1001,9 @@ class SystemRootOperationOutcome:
         except (TypeError, ValueError) as exc:
             raise ProtocolViolation("system-root status is unknown") from exc
         if status not in {
-            OutcomeStatus.VERIFIED, OutcomeStatus.CANDIDATE_REJECTED, OutcomeStatus.UNSUPPORTED
+            OutcomeStatus.VERIFIED,
+            OutcomeStatus.CANDIDATE_REJECTED,
+            OutcomeStatus.UNSUPPORTED,
         }:
             raise ProtocolViolation("system-root status is invalid for this operation")
         if obj["verified"] != (status is OutcomeStatus.VERIFIED):
@@ -984,9 +1016,7 @@ class SystemRootOperationOutcome:
             for index, item in enumerate(obj["root_box"])
         )
         search_obj = _object(obj["search"], "system-root search")
-        if set(search_obj) != {
-            "source", "attempts", "refinements", "contraction_bound", "failure"
-        }:
+        if set(search_obj) != {"source", "attempts", "refinements", "contraction_bound", "failure"}:
             raise ProtocolViolation("system-root search fields are not canonical")
         source = _string(search_obj["source"], "system-root search source")
         if source not in {"automatic", "provided"}:
@@ -1022,6 +1052,233 @@ class SystemRootOperationOutcome:
             backend,
             root_box,
             SystemRootSearchOutcome(source, attempts, refinements, contraction, failure),
+            certificate,
+            MappingProxyType(dict(obj)),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ReplayEventualPayload:
+    coefficient: WireRational
+    bound: WireRational
+    exponent: int
+    cutoff: int
+    canonical: Mapping[str, Any]
+
+    @classmethod
+    def parse(cls, value: Any) -> ReplayEventualPayload:
+        obj = _object(value, "eventual-bound certificate payload")
+        if (
+            set(obj) != {"schema_version", "coefficient", "bound", "exponent", "cutoff"}
+            or obj.get("schema_version") != "checked-eventual-bound/1"
+        ):
+            raise ProtocolViolation(
+                "eventual-bound payload fields do not match checked-eventual-bound/1"
+            )
+        coefficient = _canonical_wire_rational(
+            obj["coefficient"], "eventual-bound payload coefficient"
+        )
+        bound = _canonical_wire_rational(obj["bound"], "eventual-bound payload bound")
+        exponent, cutoff = obj["exponent"], obj["cutoff"]
+        if any(
+            isinstance(item, bool) or not isinstance(item, int) or item < 0
+            for item in (exponent, cutoff)
+        ):
+            raise ProtocolViolation("eventual-bound exponent and cutoff must be natural numbers")
+        canonical = {
+            "schema_version": "checked-eventual-bound/1",
+            "coefficient": {
+                "n": coefficient.numerator,
+                "d": coefficient.denominator,
+            },
+            "bound": {"n": bound.numerator, "d": bound.denominator},
+            "exponent": exponent,
+            "cutoff": cutoff,
+        }
+        return cls(coefficient, bound, exponent, cutoff, _freeze_json(canonical))
+
+    @property
+    def digest(self) -> str:
+        encoded = json.dumps(
+            _plain_json(self.canonical), sort_keys=True, separators=(",", ":")
+        ).encode()
+        return "sha256:" + hashlib.sha256(encoded).hexdigest()
+
+
+@dataclass(frozen=True, slots=True)
+class EventualCertificateDescriptor:
+    schema_version: str
+    checker: str
+    verifier: str
+    verification_route: str
+    payload: ReplayEventualPayload
+
+    @classmethod
+    def parse(cls, value: Any) -> EventualCertificateDescriptor:
+        obj = _object(value, "eventual-bound certificate")
+        if set(obj) != {"schema_version", "checker", "verifier", "verification_route", "payload"}:
+            raise ProtocolViolation("eventual-bound certificate fields are not canonical")
+        if obj["schema_version"] != "eventual-bound-check/1":
+            raise ProtocolViolation("eventual-bound certificate schema is unsupported")
+        if obj["checker"] != "LeanCert.Validity.checkReciprocalPowerUpper":
+            raise ProtocolViolation("eventual-bound checker authority is not recognized")
+        if obj["verifier"] != "LeanCert.Validity.verify_reciprocal_power_upper":
+            raise ProtocolViolation("eventual-bound verifier authority is not recognized")
+        if obj["verification_route"] != "compiled_checker":
+            raise ProtocolViolation("eventual-bound verification route is unsupported")
+        return cls(
+            obj["schema_version"],
+            obj["checker"],
+            obj["verifier"],
+            obj["verification_route"],
+            ReplayEventualPayload.parse(obj["payload"]),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class EventualSearchOutcome:
+    source: str
+    checks: int | None
+    configured_limit: int | None
+    exponential_steps: int | None
+    refinement_steps: int | None
+    lower_bracket: int | None
+    upper_bracket: int | None
+    refinement_complete: bool | None
+    last_cutoff: int | None
+    raw: Mapping[str, Any]
+
+    @classmethod
+    def parse(cls, value: Any) -> EventualSearchOutcome:
+        obj = _object(value, "eventual-bound search")
+        allowed = {
+            "source",
+            "checks",
+            "configured_limit",
+            "exponential_steps",
+            "refinement_steps",
+            "lower_bracket",
+            "upper_bracket",
+            "refinement_complete",
+            "last_cutoff",
+        }
+        if not set(obj) <= allowed or "source" not in obj:
+            raise ProtocolViolation("eventual-bound search fields are not canonical")
+        source = _string(obj["source"], "eventual-bound search source")
+        if source not in {"automatic", "provided"}:
+            raise ProtocolViolation("eventual-bound search source is unknown")
+        if source == "provided" and set(obj) != {"source"}:
+            raise ProtocolViolation("provided eventual-bound search must not retain discovery data")
+        numeric_names = (
+            "checks",
+            "configured_limit",
+            "exponential_steps",
+            "refinement_steps",
+            "lower_bracket",
+            "upper_bracket",
+            "last_cutoff",
+        )
+        values: dict[str, int | None] = {}
+        for name in numeric_names:
+            item = obj.get(name)
+            if item is not None and (
+                isinstance(item, bool) or not isinstance(item, int) or item < 0
+            ):
+                raise ProtocolViolation(f"eventual-bound search {name} must be natural")
+            values[name] = item
+        complete = obj.get("refinement_complete")
+        if complete is not None and not isinstance(complete, bool):
+            raise ProtocolViolation("eventual-bound search refinement_complete must be boolean")
+        assert source is not None
+        return cls(
+            source,
+            values["checks"],
+            values["configured_limit"],
+            values["exponential_steps"],
+            values["refinement_steps"],
+            values["lower_bracket"],
+            values["upper_bracket"],
+            complete,
+            values["last_cutoff"],
+            _freeze_json(obj),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class EventualOperationOutcome:
+    status: OutcomeStatus
+    backend: str
+    cutoff: int | None
+    search: EventualSearchOutcome
+    failure: Mapping[str, Any] | None
+    certificate: EventualCertificateDescriptor | None
+    raw: Mapping[str, Any]
+
+    @classmethod
+    def parse(cls, value: Any) -> EventualOperationOutcome:
+        obj = _object(value, "check_eventual_bound result")
+        if set(obj) != {
+            "verified",
+            "status",
+            "backend",
+            "cutoff",
+            "search",
+            "failure",
+            "certificate",
+        }:
+            raise ProtocolViolation("eventual-bound outcome fields are not canonical")
+        if not isinstance(obj["verified"], bool):
+            raise ProtocolViolation("eventual-bound verified flag must be boolean")
+        try:
+            status = OutcomeStatus(obj["status"])
+        except (TypeError, ValueError) as exc:
+            raise ProtocolViolation("eventual-bound status is unknown") from exc
+        if status not in {
+            OutcomeStatus.VERIFIED,
+            OutcomeStatus.CANDIDATE_REJECTED,
+            OutcomeStatus.INCONCLUSIVE,
+            OutcomeStatus.UNSUPPORTED,
+        }:
+            raise ProtocolViolation("eventual-bound status is invalid for this operation")
+        if obj["verified"] != (status is OutcomeStatus.VERIFIED):
+            raise ProtocolViolation("eventual-bound verified flag contradicts status")
+        backend = _string(obj["backend"], "eventual-bound backend")
+        cutoff = obj["cutoff"]
+        if cutoff is not None and (
+            isinstance(cutoff, bool) or not isinstance(cutoff, int) or cutoff < 0
+        ):
+            raise ProtocolViolation("eventual-bound cutoff must be a natural number")
+        search = EventualSearchOutcome.parse(obj["search"])
+        failure = obj["failure"]
+        if failure is not None:
+            failure_obj = _object(failure, "eventual-bound failure")
+            if set(failure_obj) != {"kind", "detail"}:
+                raise ProtocolViolation("eventual-bound failure fields are not canonical")
+            _string(failure_obj["kind"], "eventual-bound failure kind")
+            _string(failure_obj["detail"], "eventual-bound failure detail")
+            failure = _freeze_json(failure_obj)
+        certificate = (
+            None
+            if obj["certificate"] is None
+            else EventualCertificateDescriptor.parse(obj["certificate"])
+        )
+        if (status is OutcomeStatus.VERIFIED) != (certificate is not None):
+            raise ProtocolViolation(
+                "only verified eventual-bound outcomes may retain a certificate"
+            )
+        if status is OutcomeStatus.VERIFIED and (cutoff is None or failure is not None):
+            raise ProtocolViolation("verified eventual-bound outcome is internally inconsistent")
+        if status is not OutcomeStatus.VERIFIED and failure is None:
+            raise ProtocolViolation("non-verified eventual-bound outcome lacks a failure")
+        if certificate is not None and certificate.payload.cutoff != cutoff:
+            raise ProtocolViolation("eventual-bound certificate cutoff contradicts outcome")
+        assert backend is not None
+        return cls(
+            status,
+            backend,
+            cutoff,
+            search,
+            failure,
             certificate,
             MappingProxyType(dict(obj)),
         )

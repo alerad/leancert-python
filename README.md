@@ -33,6 +33,8 @@ Verified bounds from Bridge Contract 2.1+ can also be exported as
 Bridge Contract 2.3 extends the same workflow to unique nonlinear-system roots
 certified by exact rational Krawczyk certificates; NumPy and SciPy candidates
 remain untrusted inputs.
+Bridge Contract 2.4 adds exact reciprocal-power eventual bounds with supplied
+or automatically discovered natural-number cutoffs.
 
 After installation, `leancert doctor` checks the bundled binary, negotiated
 contract, replay support, adaptive checked route, and release provenance.
@@ -59,6 +61,13 @@ else:
 two_sided = lc.prove(
     ast.all_of(x >= 0, x <= 1),
     where={x: (0, 1)},
+)
+
+# Discover and certify a cutoff for every n at or beyond it.
+from fractions import Fraction
+n = ast.var("n", sort=ast.NATURAL)
+eventual = lc.prove(
+    ast.eventually(3 / n**2 <= Fraction(1, 1000), variable=n)
 )
 ```
 
