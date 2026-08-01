@@ -221,12 +221,13 @@ jobs:
               assert isinstance(exported, lc.ExportPrepared)
               assert (proof / 'LeanCertExport.lean').is_file()
           legacy_expr = lc.var('x')
-          adaptive = lc.verify_bound_adaptive(
-              legacy_expr * (1 - legacy_expr),
-              {'x': (0, 1)},
-              upper=0.3,
-              adaptive_config=lc.AdaptiveConfig(max_splits=5),
-          )
+          with lc.Solver() as solver:
+              adaptive = solver.verify_bound_adaptive(
+                  legacy_expr * (1 - legacy_expr),
+                  {'x': (0, 1)},
+                  upper=0.3,
+                  adaptive_config=lc.AdaptiveConfig(max_splits=5),
+              )
           assert adaptive.verified
           overlap = lc.prove(x - x <= -1, where={x: (0, 1)})
           assert isinstance(overlap, lc.Inconclusive)
