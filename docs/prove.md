@@ -40,8 +40,8 @@ the complete build provenance. Contract 2.1 additionally retains the exact
 fixed checker input and resolved Lean dependencies needed for
 [independently rebuildable export](export.md).
 
-Strict inequalities, scalar roots, integrals, eventual claims, and external
-functions currently return `Unsupported`. They are not routed through a
+Strict inequalities, scalar roots, integrals, and external functions currently
+return `Unsupported`. They are not routed through a
 discovery API or silently weakened to non-strict bounds. A bridge that does not
 advertise an expression node receives no request for that node.
 
@@ -89,6 +89,29 @@ result = lc.prove(
 Float rationalization is deterministic but does not participate in soundness.
 A bad candidate returns `CandidateRejected`; it cannot mint a verified result.
 
+## Eventual reciprocal-power bounds
+
+Contract 2.4 checks a deliberately narrow quantitative-asymptotic family:
+
+```python
+from fractions import Fraction
+
+n = ast.var("n", sort=ast.NATURAL)
+claim = ast.eventually(
+    3 / n**2 <= Fraction(1, 1000),
+    variable=n,
+)
+result = lc.prove(claim)
+```
+
+The bridge performs bounded exponential search and binary refinement as
+untrusted candidate generation. `VerifiedEventualBound` is returned only when
+`LeanCert.Validity.checkReciprocalPowerUpper` accepts the retained cutoff; the
+result records the search bracket, counts, completion state, checker, Golden
+Theorem, and exact fixed payload. A caller can bypass discovery with
+`cutoff=100` or control its budget with
+`EventualConfig(max_checks=...)`.
+
 ## Exact inputs
 
 New semantic claims reject Python floats. Use integers, `Fraction`, `Decimal`,
@@ -109,6 +132,8 @@ Ordinary mathematical non-success remains a typed result:
 - `DomainObstruction`: a mathematical domain precondition failed;
 - `Rejected`: reserved for a checked counterexample route.
 - `CandidateRejected`: a system-root candidate failed its fixed checker.
+- `EventualCandidateRejected`: a supplied or discovered cutoff was rejected.
+- `InconclusiveEventualBound`: cutoff discovery exhausted its budget.
 
 `verify_bound` remains available for the pre-1.0 expression API but is
 deprecated. It delegates to its existing conservative checked implementation;

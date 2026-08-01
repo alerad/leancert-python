@@ -283,6 +283,75 @@ class UnsupportedSystemRoot(SystemRootResult):
     reason: str
 
 
+@dataclass(frozen=True)
+class EventualSearchEvidence:
+    source: Literal["automatic", "provided"]
+    checks: int | None = None
+    configured_limit: int | None = None
+    exponential_steps: int | None = None
+    refinement_steps: int | None = None
+    lower_bracket: int | None = None
+    upper_bracket: int | None = None
+    refinement_complete: bool | None = None
+    last_cutoff: int | None = None
+
+
+@dataclass(frozen=True)
+class ReplayableEventualCertificate:
+    schema_version: str
+    payload_schema: str
+    checker: str
+    verifier: str
+    verification_route: str
+    payload_digest: str
+    coefficient: Fraction
+    bound: Fraction
+    exponent: int
+    cutoff: int
+    canonical_payload: Mapping[str, Any]
+
+
+@dataclass(frozen=True)
+class EventualBoundResult(ProofResult):
+    variable: Any
+    coefficient: Fraction | None
+    bound: Fraction | None
+    exponent: int | None
+    cutoff: int | None
+    provenance: BridgeProvenance
+    search: EventualSearchEvidence
+    original_claim: Any | None = field(default=None, kw_only=True)
+    normalized_claim: Any | None = field(default=None, kw_only=True)
+    claim_id: Any | None = field(default=None, kw_only=True)
+
+
+@dataclass(frozen=True)
+class VerifiedEventualBound(EventualBoundResult):
+    """The exact fixed-cutoff checker certified the entire natural-number tail."""
+
+    certificate: ReplayableEventualCertificate
+
+    def export_lean_project(self, path: str, *, verify: bool = True):
+        """Export and optionally kernel-check the retained fixed cutoff."""
+        from .export import export_verified_eventual_bound
+
+        return export_verified_eventual_bound(self, path, verify=verify)
+
+
+@dataclass(frozen=True)
+class EventualCandidateRejected(EventualBoundResult):
+    reason: str
+
+
+@dataclass(frozen=True)
+class InconclusiveEventualBound(EventualBoundResult):
+    reason: str
+
+
+@dataclass(frozen=True)
+class UnsupportedEventualBound(EventualBoundResult):
+    reason: str
+
 @dataclass
 class Certificate:
     """

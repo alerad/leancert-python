@@ -21,7 +21,12 @@ from typing import Any
 
 from .domain import Interval
 from .exceptions import BridgeError, BridgeRemoteError, ProtocolViolation
-from .protocol import BoundOperationOutcome, BridgeHandshake, SystemRootOperationOutcome
+from .protocol import (
+    BoundOperationOutcome,
+    BridgeHandshake,
+    EventualOperationOutcome,
+    SystemRootOperationOutcome,
+)
 
 
 def _bridge_core_expression(value: dict[str, Any]) -> dict[str, Any]:
@@ -93,8 +98,20 @@ def _bridge_core_expression(value: dict[str, Any]) -> dict[str, Any]:
             "e2": {"kind": "inv", "e": {"kind": "const", "val": {"n": 2, "d": 1}}},
         }
     if kind in {
-        "neg", "inv", "exp", "sin", "cos", "log", "atan", "arsinh",
-        "atanh", "sinc", "erf", "sinh", "cosh", "tanh",
+        "neg",
+        "inv",
+        "exp",
+        "sin",
+        "cos",
+        "log",
+        "atan",
+        "arsinh",
+        "atanh",
+        "sinc",
+        "erf",
+        "sinh",
+        "cosh",
+        "tanh",
     }:
         return {"kind": kind, "e": _bridge_core_expression(value["e"])}
     if kind == "named_const":
@@ -780,12 +797,50 @@ class LeanClient:
                 )
                 for item in box_json
             )
-            actual_box = tuple(
-                (item.lower.fraction, item.upper.fraction) for item in payload.box
-            )
+            actual_box = tuple((item.lower.fraction, item.upper.fraction) for item in payload.box)
             if actual_box != expected_box or payload.taylor_depth != taylor_depth:
                 raise ProtocolViolation(
                     "Krawczyk certificate box or Taylor depth contradicts the request"
+                )
+        return response
+
+    def check_eventual_bound(
+        self,
+        coefficient: Fraction,
+        bound: Fraction,
+        exponent: int,
+        *,
+        cutoff: int | None = None,
+        max_checks: int = 1000,
+    ) -> dict[str, Any]:
+        """Check or discover a reciprocal-power cutoff through Contract 2.4."""
+        request: dict[str, Any] = {
+            "coefficient": {
+                "n": coefficient.numerator,
+                "d": coefficient.denominator,
+            },
+            "bound": {"n": bound.numerator, "d": bound.denominator},
+            "exponent": exponent,
+            "maxChecks": max_checks,
+        }
+        if cutoff is not None:
+            request["cutoff"] = cutoff
+        response = self.call("check_eventual_bound", request)
+        contract = self.bridge_contract
+        if contract.api_version >= type(contract.api_version)(2, 4, 0):
+            outcome = contract.parse_eventual_outcome(response)
+        else:
+            outcome = EventualOperationOutcome.parse(response)
+        if outcome.certificate is not None:
+            payload = outcome.certificate.payload
+            if (
+                payload.coefficient.fraction != coefficient
+                or payload.bound.fraction != bound
+                or payload.exponent != exponent
+                or (cutoff is not None and payload.cutoff != cutoff)
+            ):
+                raise ProtocolViolation(
+                    "eventual-bound certificate payload contradicts the checked request"
                 )
         return response
 

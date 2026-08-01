@@ -105,6 +105,13 @@ from .result import (
     VerifiedSystemRoot,
     CandidateRejected,
     UnsupportedSystemRoot,
+    EventualSearchEvidence,
+    ReplayableEventualCertificate,
+    EventualBoundResult,
+    VerifiedEventualBound,
+    EventualCandidateRejected,
+    InconclusiveEventualBound,
+    UnsupportedEventualBound,
 )
 
 # Adaptive verification (CEGAR)
@@ -147,7 +154,7 @@ from .solver import (
 )
 
 # Unified semantic-claim proving API
-from .proving import KrawczykCandidate, ProveConfig, SystemRootConfig, prove
+from .proving import EventualConfig, KrawczykCandidate, ProveConfig, SystemRootConfig, prove
 
 # Client (for advanced users)
 from .client import LeanClient
@@ -276,6 +283,19 @@ __all__ = [
     "ExportDependencyUnavailable",
     "ExportResourceLimit",
     "ExportVerificationMismatch",
+    "KrawczykSearchEvidence",
+    "ReplayableKrawczykCertificate",
+    "SystemRootResult",
+    "VerifiedSystemRoot",
+    "CandidateRejected",
+    "UnsupportedSystemRoot",
+    "EventualSearchEvidence",
+    "ReplayableEventualCertificate",
+    "EventualBoundResult",
+    "VerifiedEventualBound",
+    "EventualCandidateRejected",
+    "InconclusiveEventualBound",
+    "UnsupportedEventualBound",
     # Adaptive verification (CEGAR)
     "AdaptiveResult",
     "AdaptiveConfig",
@@ -289,6 +309,9 @@ __all__ = [
     "verify_bound",
     "verify_bound_or_raise",
     "ProveConfig",
+    "SystemRootConfig",
+    "KrawczykCandidate",
+    "EventualConfig",
     "prove",
     "find_roots",
     "find_unique_root",

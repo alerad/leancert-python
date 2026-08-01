@@ -55,9 +55,17 @@ the bridge returns the advertised `LeanCert.Engine.krawczykCheck` checker,
 `LeanCert.Validity.verify_unique_system_root` verifier, compiled-checker route,
 and a fixed payload matching the requested system and exact rational box.
 
+Contract 2.4 adds `check_eventual_bound` and replayable
+`eventual-bound-check/1` certificates for nonnegative rational multiples of
+reciprocal powers. Cutoff search is untrusted. The SDK validates the exact
+coefficient, bound, exponent, and retained cutoff against the request and
+accepts success only from `checkReciprocalPowerUpper` paired with
+`verify_reciprocal_power_upper`.
+
 The certificate families are intentionally distinct: adaptive evidence may
 close checked subdivision leaves, while `bound-check/2` and
-`krawczyk-check/1` support standalone project export.
+`krawczyk-check/1`, and `eventual-bound-check/1` support standalone project
+export.
 
 Golden fixtures live under
 `leancert/tests/fixtures/bridge-contract-{1.1,2.0,2.1}`. Contract fixtures are
