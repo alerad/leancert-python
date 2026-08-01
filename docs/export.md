@@ -24,5 +24,10 @@ and checks the resulting declaration with `#assert_trust kernel`.
 This is a second verification event. It does not change the original bridge
 result from `compiled_checker` into a kernel result.
 
+Project creation is atomic. LeanCert writes and, when requested, builds a
+temporary sibling directory before publishing the final path. Build rejection,
+missing tooling, and the typed `ExportResourceLimit` timeout outcome leave no
+partial project at the requested destination.
+
 Contract 2.0 `bound-check/1` descriptors remain valid checked outcomes, but are
 not exportable because they do not retain fixed checker inputs.
