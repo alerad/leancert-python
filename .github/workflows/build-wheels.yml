@@ -209,12 +209,14 @@ jobs:
           x = ast.var('x')
           checked = lc.prove(x**2 <= 1, where={x: (0, 1)})
           assert isinstance(checked, lc.Verified)
-          assert checked.provenance.bridge_api_version == '2.2.0'
-          assert checked.provenance.protocol_version == '2.2.0'
+          assert checked.provenance.bridge_api_version == '2.4.0'
+          assert checked.provenance.protocol_version == '2.4.0'
           assert checked.provenance.lean_version
           assert checked.provenance.build_profile == 'release'
           assert checked.provenance.source_digest.startswith('sha256:')
           assert checked.provenance.environment_digest.startswith('sha256:')
+          assert 'check_unique_system_root' in doctor.bridge_info['capabilities']
+          assert 'check_eventual_bound' in doctor.bridge_info['capabilities']
           with tempfile.TemporaryDirectory() as root:
               proof = Path(root) / 'proof'
               exported = checked.export_lean_project(str(proof), verify=False)
