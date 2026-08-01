@@ -69,6 +69,27 @@ def test_verified_result_retains_replay_identity_and_exports_project(tmp_path):
     ).read_text()
 
 
+def test_exported_text_files_are_utf8_on_locale_constrained_platforms(
+    tmp_path, monkeypatch
+):
+    x = ast.var("x")
+    result = lc.prove(x <= 1, where={x: (0, 1)}, client=ReplayClient((response(),)))
+    original = Path.write_text
+    encodings = []
+
+    def require_utf8(path, data, *args, **kwargs):
+        encoding = kwargs.get("encoding")
+        encodings.append(encoding)
+        if encoding != "utf-8":
+            raise UnicodeEncodeError("cp1252", "ℚ", 0, 1, "not representable")
+        return original(path, data, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "write_text", require_utf8)
+    exported = result.export_lean_project(str(tmp_path / "proof"), verify=False)
+    assert isinstance(exported, lc.ExportPrepared)
+    assert encodings and set(encodings) == {"utf-8"}
+
+
 def test_two_sided_export_replays_each_checked_direction(tmp_path):
     x = ast.var("x")
     result = lc.prove(

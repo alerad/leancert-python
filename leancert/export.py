@@ -210,12 +210,15 @@ def export_verified_bound(result: Verified, path: str, *, verify: bool = True):
         tempfile.mkdtemp(prefix=f".{output.name}.", dir=str(output.parent))
     ).resolve()
     try:
-        (staging / "lean-toolchain").write_text(f"{provenance.lean_toolchain}\n")
-        (staging / "lakefile.toml").write_text(lakefile)
-        (staging / "LeanCertExport.lean").write_text(lean_source)
+        (staging / "lean-toolchain").write_text(
+            f"{provenance.lean_toolchain}\n", encoding="utf-8"
+        )
+        (staging / "lakefile.toml").write_text(lakefile, encoding="utf-8")
+        (staging / "LeanCertExport.lean").write_text(lean_source, encoding="utf-8")
         (staging / "claim.json").write_text(
             json.dumps(ast.encode_canonical(result.normalized_claim), indent=2, sort_keys=True)
-            + "\n"
+            + "\n",
+            encoding="utf-8",
         )
         (staging / "certificate.json").write_text(
             json.dumps(
@@ -236,15 +239,18 @@ def export_verified_bound(result: Verified, path: str, *, verify: bool = True):
                 indent=2,
                 sort_keys=True,
             )
-            + "\n"
+            + "\n",
+            encoding="utf-8",
         )
         (staging / "provenance.json").write_text(
-            json.dumps(_jsonable(asdict(provenance)), indent=2, sort_keys=True) + "\n"
+            json.dumps(_jsonable(asdict(provenance)), indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
         )
         (staging / "README.md").write_text(
             "# LeanCert exported claim\n\n"
             "This project replays the fixed bound checker input retained by the Python SDK.\n\n"
-            "```bash\nlake update\nlake build\n```\n"
+            "```bash\nlake update\nlake build\n```\n",
+            encoding="utf-8",
         )
         if verify:
             lake = shutil.which("lake")
