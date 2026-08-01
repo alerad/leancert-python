@@ -48,9 +48,16 @@ the typed `verify_adaptive` capability. Its successful outcomes retain the
 checked rational optimizer, corresponding correctness theorem, exact request,
 configuration, and candidate enclosure under `adaptive-bound-check/1`.
 
-The two certificate families are intentionally distinct: adaptive evidence may
-close checked subdivision leaves, while only `bound-check/2` currently supports
-standalone project export.
+Contract 2.3 adds `check_unique_system_root` and replayable
+`krawczyk-check/1` certificates. Candidate generation and externally supplied
+centers or preconditioners are untrusted. The SDK accepts `verified` only when
+the bridge returns the advertised `LeanCert.Engine.krawczykCheck` checker,
+`LeanCert.Validity.verify_unique_system_root` verifier, compiled-checker route,
+and a fixed payload matching the requested system and exact rational box.
+
+The certificate families are intentionally distinct: adaptive evidence may
+close checked subdivision leaves, while `bound-check/2` and
+`krawczyk-check/1` support standalone project export.
 
 Golden fixtures live under
 `leancert/tests/fixtures/bridge-contract-{1.1,2.0,2.1}`. Contract fixtures are

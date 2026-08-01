@@ -22,7 +22,9 @@ from .result import (
     ExportVerified,
     LeanProjectArtifact,
     ReplayableBoundCertificate,
+    ReplayableKrawczykCertificate,
     Verified,
+    VerifiedSystemRoot,
 )
 
 
@@ -40,8 +42,14 @@ def _core_expression(node: Any) -> str:
         return f"(.var {node['idx']})"
     if kind in {"add", "mul"}:
         return f"(.{kind} {_core_expression(node['e1'])} {_core_expression(node['e2'])})"
-    if kind in {"neg", "sin", "cos", "exp"}:
+    if kind in {
+        "neg", "inv", "sin", "cos", "exp", "log", "sqrt", "atan", "arsinh",
+        "atanh", "sinc", "erf", "sinh", "cosh", "tanh",
+    }:
         return f"(.{kind} {_core_expression(node['e'])})"
+    if kind == "named_const":
+        name = "pi" if node["name"] == "pi" else "eulerMascheroni"
+        return f"(.namedConst .{name})"
     raise ValueError(f"core expression kind {kind!r} is not globally exportable")
 
 
@@ -290,4 +298,178 @@ def export_verified_bound(result: Verified, path: str, *, verify: bool = True):
             shutil.rmtree(staging)
 
 
-__all__ = ["export_verified_bound"]
+def _render_krawczyk_project(certificate: ReplayableKrawczykCertificate) -> str:
+    if (
+        certificate.checker != "LeanCert.Engine.krawczykCheck"
+        or certificate.verifier != "LeanCert.Validity.verify_unique_system_root"
+    ):
+        raise ValueError("certificate authority is not the supported Krawczyk boundary")
+    dimension = len(certificate.system)
+    system = ",\n  ".join(_core_expression(item) for item in certificate.system)
+    box = ",\n  ".join(_interval(item) for item in certificate.box)
+    center = ", ".join(_rat(item) for item in certificate.center)
+    rows = "; ".join(
+        ", ".join(_rat(item) for item in row)
+        for row in certificate.preconditioner
+    )
+    return "\n".join(
+        [
+            "import LeanCert.Validity.Krawczyk",
+            "import LeanCert.Tactic.Verification",
+            "",
+            "open LeanCert.Core LeanCert.Engine LeanCert.Validity",
+            "",
+            "namespace LeanCertExport",
+            "",
+            f"def system : Fin {dimension} → Expr := ![",
+            f"  {system}",
+            "]",
+            "",
+            f"def box : Fin {dimension} → IntervalRat := ![",
+            f"  {box}",
+            "]",
+            "",
+            f"def certificate : KrawczykCert {dimension} where",
+            f"  center := ![{center}]",
+            f"  preconditioner := !![{rows}]",
+            "",
+            "def config : EvalConfig := {",
+            f"  taylorDepth := {certificate.taylor_depth}",
+            "}",
+            "",
+            "theorem certificate_check :",
+            "    krawczykCheck system box certificate config = true := by",
+            "  decide +kernel",
+            "",
+            "theorem exported_claim :",
+            "    ∃! x, FinBoxMem x box ∧ SystemZero system x :=",
+            "  verify_unique_system_root system box certificate config certificate_check",
+            "",
+            "#assert_trust kernel exported_claim",
+            "",
+            "end LeanCertExport",
+            "",
+        ]
+    )
+
+
+def export_verified_system_root(
+    result: VerifiedSystemRoot, path: str, *, verify: bool = True
+):
+    """Create a standalone fixed Krawczyk project and optionally kernel-check it."""
+    certificate = result.certificate
+    provenance = result.provenance
+    if not all(
+        (
+            provenance.lean_toolchain,
+            provenance.leancert_source,
+            provenance.leancert_resolved_revision,
+        )
+    ):
+        return ExportUnsupported("bridge provenance lacks dependency identities")
+    if provenance.leancert_source != "https://github.com/alerad/leancert.git":
+        return ExportUnsupported("export requires the canonical LeanCert repository")
+    assert provenance.leancert_resolved_revision is not None
+    assert provenance.lean_toolchain is not None
+    if re.fullmatch(r"[0-9a-f]{40}", provenance.leancert_resolved_revision) is None:
+        return ExportUnsupported("LeanCert dependency is not pinned to a full Git revision")
+    try:
+        lean_source = _render_krawczyk_project(certificate)
+    except ValueError as exc:
+        return ExportUnsupported(str(exc))
+
+    output = Path(path).expanduser().resolve()
+    if output.exists():
+        raise FileExistsError(f"export destination already exists: {output}")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    artifact = LeanProjectArtifact(
+        str(output), str(result.claim_id), (certificate.payload_digest,)
+    )
+    lakefile = (
+        'name = "LeanCertExport"\n'
+        'version = "0.1.0"\n\n'
+        'defaultTargets = ["LeanCertExport"]\n\n'
+        '[[require]]\n'
+        'name = "leancert"\n'
+        f'git = "{provenance.leancert_source}"\n'
+        f'rev = "{provenance.leancert_resolved_revision}"\n\n'
+        '[[lean_lib]]\n'
+        'name = "LeanCertExport"\n'
+    )
+    staging = Path(
+        tempfile.mkdtemp(prefix=f".{output.name}.", dir=str(output.parent))
+    ).resolve()
+    try:
+        (staging / "lean-toolchain").write_text(
+            f"{provenance.lean_toolchain}\n", encoding="utf-8"
+        )
+        (staging / "lakefile.toml").write_text(lakefile, encoding="utf-8")
+        (staging / "LeanCertExport.lean").write_text(lean_source, encoding="utf-8")
+        (staging / "claim.json").write_text(
+            json.dumps(ast.encode_canonical(result.normalized_claim), indent=2, sort_keys=True)
+            + "\n",
+            encoding="utf-8",
+        )
+        (staging / "certificate.json").write_text(
+            json.dumps(
+                {
+                    "claim_id": str(result.claim_id),
+                    "schema_version": certificate.schema_version,
+                    "payload_digest": certificate.payload_digest,
+                    "checker": certificate.checker,
+                    "verifier": certificate.verifier,
+                    "verification_route": certificate.verification_route,
+                    "payload": _jsonable(certificate.canonical_payload),
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        (staging / "provenance.json").write_text(
+            json.dumps(_jsonable(asdict(provenance)), indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        (staging / "README.md").write_text(
+            "# LeanCert exported unique system root\n\n"
+            "This project replays a fixed rational Krawczyk certificate.\n\n"
+            "```bash\nlake update\nlake build\n```\n",
+            encoding="utf-8",
+        )
+        if verify:
+            lake = shutil.which("lake")
+            if lake is None:
+                return ExportDependencyUnavailable("lake is not available on PATH")
+            try:
+                process = subprocess.run(
+                    [lake, "build", "LeanCertExport"],
+                    cwd=staging,
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    timeout=900,
+                    check=False,
+                )
+            except subprocess.TimeoutExpired as exc:
+                output_text = exc.stdout or ""
+                if isinstance(output_text, bytes):
+                    output_text = output_text.decode(errors="replace")
+                return ExportResourceLimit(
+                    artifact, "kernel replay exceeded the export time limit", 900, output_text
+                )
+            if process.returncode != 0:
+                return ExportVerificationMismatch(
+                    artifact, "exported project did not kernel-check", process.stdout
+                )
+        staging.rename(output)
+        staging = output
+        if not verify:
+            return ExportPrepared(artifact)
+        return ExportVerified(artifact, "kernel", process.stdout)
+    finally:
+        if staging != output and staging.exists():
+            shutil.rmtree(staging)
+
+
+__all__ = ["export_verified_bound", "export_verified_system_root"]

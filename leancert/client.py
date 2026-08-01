@@ -21,7 +21,7 @@ from typing import Any
 
 from .domain import Interval
 from .exceptions import BridgeError, BridgeRemoteError, ProtocolViolation
-from .protocol import BoundOperationOutcome, BridgeHandshake
+from .protocol import BoundOperationOutcome, BridgeHandshake, SystemRootOperationOutcome
 
 
 def _bridge_core_expression(value: dict[str, Any]) -> dict[str, Any]:
@@ -737,6 +737,57 @@ class LeanClient:
                 "taylorDepth": taylor_depth,
             },
         )
+
+    def check_unique_system_root(
+        self,
+        system_json: list[dict[str, Any]],
+        box_json: list[dict[str, Any]],
+        *,
+        candidate: dict[str, Any] | None = None,
+        max_iterations: int = 8,
+        max_dimension: int = 4,
+        precision_bits: int = 20,
+        taylor_depth: int = 10,
+    ) -> dict[str, Any]:
+        """Check a unique nonlinear-system root through Contract 2.3."""
+        request: dict[str, Any] = {
+            "system": system_json,
+            "box": box_json,
+            "maxIterations": max_iterations,
+            "maxDimension": max_dimension,
+            "precisionBits": precision_bits,
+            "taylorDepth": taylor_depth,
+        }
+        if candidate is not None:
+            request["candidate"] = candidate
+        response = self.call("check_unique_system_root", request)
+        contract = self.bridge_contract
+        if contract.api_version >= type(contract.api_version)(2, 3, 0):
+            outcome = contract.parse_system_root_outcome(response)
+        else:
+            outcome = SystemRootOperationOutcome.parse(response)
+        if outcome.certificate is not None:
+            payload = outcome.certificate.payload
+            expected_system = tuple(_bridge_core_expression(item) for item in system_json)
+            if tuple(dict(item) for item in payload.system) != expected_system:
+                raise ProtocolViolation(
+                    "Krawczyk certificate system does not match the checked request"
+                )
+            expected_box = tuple(
+                (
+                    Fraction(item["lo"]["n"], item["lo"]["d"]),
+                    Fraction(item["hi"]["n"], item["hi"]["d"]),
+                )
+                for item in box_json
+            )
+            actual_box = tuple(
+                (item.lower.fraction, item.upper.fraction) for item in payload.box
+            )
+            if actual_box != expected_box or payload.taylor_depth != taylor_depth:
+                raise ProtocolViolation(
+                    "Krawczyk certificate box or Taylor depth contradicts the request"
+                )
+        return response
 
     def forward_interval(
         self,

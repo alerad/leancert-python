@@ -31,3 +31,9 @@ partial project at the requested destination.
 
 Contract 2.0 `bound-check/1` descriptors remain valid checked outcomes, but are
 not exportable because they do not retain fixed checker inputs.
+
+Contract 2.3 `VerifiedSystemRoot` outcomes retain a complete
+`checked-unique-system-root/1` payload. Their exported project reconstructs the
+exact `KrawczykCert`, kernel-reduces `krawczykCheck`, applies
+`verify_unique_system_root`, and pins the resulting theorem with
+`#assert_trust kernel`.
