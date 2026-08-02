@@ -1,13 +1,34 @@
 schema_version = 1
 baseline_commit = "716cb2d"
 baseline_tag = "v0.3.2-apache-final"
-default_original_license = "LicenseRef-LeanCert-Evaluation-1.0"
+new_original_material_license = "LicenseRef-LeanCert-Evaluation-1.0"
 path_pattern_syntax = "gitignore"
+unmatched_path_policy = "error"
+overlapping_scope_policy = "error"
+classifies = ["repository-checkout", "sdist", "wheel"]
+directory_entry_policy = "ignore"
+symlink_policy = "classify-link-path-without-following-target"
+git_submodule_policy = "classify-gitlink-without-following-contents"
 
-# This manifest classifies the current source distribution. Exact paths and
-# directory patterns are interpreted relative to the repository root. A mixed
-# expression means different portions of the combined file are governed by
-# the indicated licenses; it does not dual-license every portion.
+# Resolution rules:
+#
+# * Every tracked file-like entry in a repository checkout and every file in
+#   an sdist or wheel must match exactly one scope. There is no first-match or
+#   last-match precedence, and an exact path does not override a pattern.
+#   Overlapping and unmatched paths are errors.
+# * Checkout paths are POSIX-style and relative to the repository root. For an
+#   sdist, the archive's single top-level project directory is removed before
+#   matching. Wheel member paths are matched as stored in the archive.
+# * Directory entries themselves are ignored. A symlink is classified at its
+#   own path without following its target. A Git submodule entry is classified
+#   at its gitlink path without traversing its separately licensed contents.
+# * `new_original_material_license` is a development policy, not a fallback:
+#   new material must still be added explicitly to exactly one scope.
+# * For a mixed-origin file, the expression states the combined obligations
+#   applying to that file as distributed. It does not make every source
+#   portion independently available under every listed license. Apache-2.0
+#   continues to govern the baseline portions preserved at `baseline_commit`;
+#   the evaluation license governs original post-baseline additions.
 
 [[scope]]
 classification = "evaluation-only"
@@ -40,6 +61,7 @@ paths = [
 [[scope]]
 classification = "mixed-origin"
 license_expression = "Apache-2.0 AND LicenseRef-LeanCert-Evaluation-1.0"
+note = "Aggregate expression only; it does not dual-license each source portion."
 paths = [
   ".github/workflows/build-wheels.yml",
   "README.md",
@@ -112,5 +134,12 @@ paths = [
 [[scope]]
 classification = "generated"
 license_expression = "DERIVED-FROM-INPUTS"
-paths = ["build/**", "dist/**", "*.egg-info/**", "*.dist-info/**"]
+paths = [
+  "build/**",
+  "dist/**",
+  "*.egg-info/**",
+  "*.dist-info/**",
+  "PKG-INFO",
+  "setup.cfg",
+]
 note = "Generated archives and build products inherit the licenses of the material they contain."

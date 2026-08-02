@@ -7,11 +7,11 @@ Post-Baseline SDK Material
 --------------------------
 
 The authoritative file-level classification for this repository is
-`LICENSE_SCOPE.toml`. Unless that manifest expressly identifies material
-otherwise, original Python SDK code and other original material first
-published after commit 716cb2d (the baseline tagged
-`v0.3.2-apache-final`) is licensed under the LeanCert Evaluation License 1.0
-(Provisional), available at:
+`LICENSE_SCOPE.toml`. Material governed by the LeanCert Evaluation License is
+identified there explicitly; unmatched or overlapping paths are manifest
+errors and receive no license merely by omission. The manifest records commit
+716cb2d (tagged `v0.3.2-apache-final`) as the historical boundary used to
+classify mixed-origin files. The evaluation license is available at:
 
     LICENSES/LeanCert-Evaluation-1.0.txt
 
