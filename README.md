@@ -36,6 +36,12 @@ remain untrusted inputs.
 Bridge Contract 2.4 adds exact reciprocal-power eventual bounds with supplied
 or automatically discovered natural-number cutoffs.
 
+Exported projects can be audited without rerunning Python or numerical search:
+
+```bash
+leancert verify exported_proofs/ --require-trust kernel
+```
+
 After installation, `leancert doctor` checks the bundled binary, negotiated
 contract, replay support, adaptive checked route, and release provenance.
 
@@ -109,6 +115,7 @@ print(verified)  # True - proven for every possible input!
 - **Neural Networks**: Verify ReLU networks, transformers
 - **Root Finding**: Locate and isolate roots with guaranteed correctness
 - **Integration**: Compute integral bounds
+- **Independent Audit**: Rebuild exported fixed certificates with `leancert verify`
 - **PyTorch Import**: Load weights directly from PyTorch models
 
 ## Supported Functions

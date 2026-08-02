@@ -42,3 +42,38 @@ Contract 2.4 `VerifiedEventualBound` outcomes export the retained fixed cutoff,
 not the discovery procedure. The project kernel-reduces
 `checkReciprocalPowerUpper`, applies `verify_reciprocal_power_upper`, and uses
 `#assert_trust kernel` on the theorem for the complete natural-number tail.
+
+## Verify exported projects
+
+Every new export contains an `artifact.json` manifest using schema
+`leancert-export/1`. The manifest binds the claim identifier, certificate
+payload digests, expected trust class, Lean target, and SHA-256 identities of
+the proof, claim, certificate, provenance, toolchain, and Lake configuration.
+
+Verify one project or recursively discover projects beneath a directory:
+
+```bash
+leancert verify verified-sine
+leancert verify exported_proofs/ --require-trust kernel
+leancert verify exported_proofs/ --format json
+```
+
+Verification first validates the artifact envelope and its semantic claim
+digest. It then runs the pinned project's explicit `LeanCertExport` target.
+The numerical search and Python proving operation are not rerun.
+
+The command uses stable exit codes:
+
+| Code | Meaning |
+| --- | --- |
+| `0` | Every discovered artifact independently rebuilt |
+| `1` | Lean rejected at least one exported theorem |
+| `2` | An artifact or command argument was malformed |
+| `3` | Required verification infrastructure was unavailable |
+| `4` | A rebuild exceeded its resource limit |
+
+Use `--timeout SECONDS` to set the per-project build limit, `--lake PATH` to
+select a Lake executable, and `--fail-fast` to stop after the first failure.
+JSON reports use schema `leancert-verification-report/1` and include each
+artifact's claim identifier, certificate digests, trust class, result, timing,
+and captured build output.
