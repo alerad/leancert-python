@@ -1,0 +1,116 @@
+schema_version = 1
+baseline_commit = "716cb2d"
+baseline_tag = "v0.3.2-apache-final"
+default_original_license = "LicenseRef-LeanCert-Evaluation-1.0"
+path_pattern_syntax = "gitignore"
+
+# This manifest classifies the current source distribution. Exact paths and
+# directory patterns are interpreted relative to the repository root. A mixed
+# expression means different portions of the combined file are governed by
+# the indicated licenses; it does not dual-license every portion.
+
+[[scope]]
+classification = "evaluation-only"
+license_expression = "LicenseRef-LeanCert-Evaluation-1.0"
+paths = [
+  "docs/**",
+  "leancert/ast/**",
+  "leancert/cli.py",
+  "leancert/doctor.py",
+  "leancert/export.py",
+  "leancert/operations/**",
+  "leancert/protocol.py",
+  "leancert/proving.py",
+  "leancert/verification.py",
+  "leancert/tests/fixtures/ast-v1/**",
+  "leancert/tests/fixtures/bridge-contract-1.1/**",
+  "leancert/tests/fixtures/bridge-contract-2.0/**",
+  "leancert/tests/fixtures/bridge-contract-2.1/**",
+  "leancert/tests/test_doctor.py",
+  "leancert/tests/test_eventual_bounds.py",
+  "leancert/tests/test_export.py",
+  "leancert/tests/test_protocol_v2.py",
+  "leancert/tests/test_semantic_ast.py",
+  "leancert/tests/test_semantic_ast_contract.py",
+  "leancert/tests/test_system_roots.py",
+  "leancert/tests/test_unified_prove.py",
+  "leancert/tests/test_verification_cli.py",
+]
+
+[[scope]]
+classification = "mixed-origin"
+license_expression = "Apache-2.0 AND LicenseRef-LeanCert-Evaluation-1.0"
+paths = [
+  ".github/workflows/build-wheels.yml",
+  "README.md",
+  "bridge-version.txt",
+  "leancert/__init__.py",
+  "leancert/adaptive.py",
+  "leancert/client.py",
+  "leancert/exceptions.py",
+  "leancert/nn.py",
+  "leancert/quantifier.py",
+  "leancert/result.py",
+  "leancert/simplify.py",
+  "leancert/solver.py",
+  "leancert/tests/test_bound_outcomes.py",
+  "leancert/tests/test_client_contract.py",
+  "pyproject.toml",
+]
+
+[[scope]]
+classification = "apache-baseline-unchanged"
+license_expression = "Apache-2.0"
+paths = [
+  ".gitignore",
+  "MANIFEST.in",
+  "RELEASING.md",
+  "examples/nn_verification.py",
+  "leancert/_version.py",
+  "leancert/config.py",
+  "leancert/domain.py",
+  "leancert/expr.py",
+  "leancert/py.typed",
+  "leancert/rational.py",
+  "leancert/tests/__init__.py",
+  "leancert/tests/test_adaptive_expansions.py",
+  "leancert/tests/test_adaptive_verification.py",
+  "leancert/tests/test_algebraic_splitting.py",
+  "leancert/tests/test_api.py",
+  "leancert/tests/test_comprehensive.py",
+  "leancert/tests/test_config.py",
+  "leancert/tests/test_domain.py",
+  "leancert/tests/test_domain_splitting.py",
+  "leancert/tests/test_expr.py",
+  "leancert/tests/test_nn.py",
+  "leancert/tests/test_proof_assembly.py",
+  "leancert/tests/test_quantifier_synthesis.py",
+  "leancert/tests/test_rational.py",
+  "leancert/tests/test_result.py",
+  "leancert/tests/test_simplify.py",
+  "leancert/tests/test_witness.py",
+  "leancert/validation.py",
+]
+
+[[scope]]
+classification = "separately-licensed-bundled-binary"
+license_expression = "Apache-2.0"
+paths = ["leancert/bin/**"]
+note = "LeanCert Bridge binaries retain their separately distributed Apache-2.0 license."
+
+[[scope]]
+classification = "licensing-and-administrative"
+license_expression = "SEE-FILE"
+paths = [
+  "LICENSE",
+  "LICENSES/**",
+  "LICENSE_SCOPE.toml",
+  "COMMERCIAL.md",
+  "THIRD_PARTY_NOTICES.md",
+]
+
+[[scope]]
+classification = "generated"
+license_expression = "DERIVED-FROM-INPUTS"
+paths = ["build/**", "dist/**", "*.egg-info/**", "*.dist-info/**"]
+note = "Generated archives and build products inherit the licenses of the material they contain."

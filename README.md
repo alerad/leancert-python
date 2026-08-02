@@ -157,8 +157,11 @@ Personal evaluation, education, non-commercial research, and a bounded
 90-day organizational proof of concept are permitted. Production deployment,
 commercial product development, customer services, and SaaS/API deployment
 require a separate written commercial license. Generated reports,
-certificates, and proof artifacts may be retained and published within the
-license terms. See [COMMERCIAL.md](COMMERCIAL.md) for the commercial boundary.
+certificates, and proof artifacts lawfully created during permitted use remain
+free to retain, publish, and use, including commercially; this does not grant
+continued rights to execute the SDK. See [COMMERCIAL.md](COMMERCIAL.md) for the
+commercial boundary and [LICENSE_SCOPE.toml](LICENSE_SCOPE.toml) for the
+authoritative source classification.
 
 Python SDK material through commit `716cb2d`, preserved by the tag
 `v0.3.2-apache-final`, remains available under Apache-2.0. LeanCert Core,

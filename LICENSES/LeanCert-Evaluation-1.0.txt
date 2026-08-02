@@ -10,9 +10,10 @@ an open-source license.
 "Licensor" means Alejandro Radisic or a successor that owns the applicable
 copyright.
 
-"Software" means original Python SDK code and other original material first
-published in the leancert-python repository after commit 716cb2d, excluding
-Earlier Material and Third-Party Material as defined below.
+"Software" means the files and portions of files identified as governed by
+this license in `LICENSE_SCOPE.toml`. Unless expressly identified otherwise,
+original Python SDK material first published after commit 716cb2d is included.
+Earlier Material and Third-Party Material are excluded.
 
 "Community Evaluator" means a natural person acting for personal,
 educational, or non-commercial research purposes and not on behalf of a
@@ -66,18 +67,21 @@ granted.
 
 3. Generated Results and Evidence
 
-During a permitted use, you may retain, inspect, reproduce, and publish
-results, reports, certificates, proof artifacts, and other evidence generated
-by the Software, provided that they do not contain a substantial portion of
-the Software's source code. This paragraph grants no rights in Third-Party
-Material, confidential information, personal data, or material owned by
-another person.
+Results, reports, certificates, proof artifacts, and other evidence lawfully
+generated during a permitted use may subsequently be retained, inspected,
+reproduced, published, and used for any purpose, including commercial
+purposes, provided that they do not contain a substantial portion of the
+Software's source code. This permission does not permit continued execution,
+deployment, or other use of the Software outside the applicable license grant.
+It grants no rights in Third-Party Material, confidential information,
+personal data, or material owned by another person.
 
 Generated results and evidence are provided without any warranty of
 correctness, fitness, regulatory acceptance, or suitability for a particular
-purpose. Rights to use generated results in production may depend on a
-separate commercial license when their generation or continuing use involves
-Production Use of the Software.
+purpose. Generating, updating, integrating, or operationally obtaining new
+evidence through Production Use of the Software requires a commercial
+license, but a static artifact lawfully generated under this license does not
+become restricted merely because it is later used commercially.
 
 4. Uses Requiring a Commercial License
 
@@ -102,15 +106,16 @@ separate written agreement with the Licensor.
 
 5. Machine-Learning Restriction
 
-You may not ingest, scrape, or use the Software's source code, documentation,
-or non-public bundled materials as training data, fine-tuning data, evaluation
-data, or a dataset source for a machine-learning or artificial-intelligence
-system.
+You may not use the Software's source code or non-public bundled materials to
+train or fine-tune the parameters of a machine-learning model, or
+systematically extract them to create a training dataset or substitute
+implementation.
 
-This restriction does not prohibit using documented LeanCert functionality,
-within an otherwise permitted Evaluation Use, to analyze or verify a
-machine-learning model. It also does not restrict generated results and
-evidence beyond Section 3.
+This restriction does not prohibit ordinary use of publicly available
+documentation, use of the Software as a tool by or for an AI system within an
+otherwise permitted use, or evaluation of a model's outputs using documented
+Software functionality. Generated results and evidence are not restricted
+beyond Section 3, including when they are used as machine-learning data.
 
 6. Notices and Technical Measures
 
@@ -165,3 +170,6 @@ affirmatively choose that later version or separately agree in writing.
 By exercising a permission granted by this license, you indicate acceptance
 of its terms. If you do not accept them, you receive no permission under this
 license.
+
+Everyone is permitted to copy and distribute verbatim copies of this license
+document, but changing it is not allowed.

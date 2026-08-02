@@ -7,8 +7,8 @@ name = "leancert"
 version = "1.0.0.dev0"
 description = "Formal verification for numerical Python code - powered by Lean4"
 readme = "README.md"
-license = "LicenseRef-LeanCert-Evaluation-1.0"
-license-files = ["LICENSE", "LICENSES/*", "COMMERCIAL.md", "THIRD_PARTY_NOTICES.md"]
+license = "LicenseRef-LeanCert-Evaluation-1.0 AND Apache-2.0"
+license-files = ["LICENSE", "LICENSES/*", "LICENSE_SCOPE.toml", "COMMERCIAL.md", "THIRD_PARTY_NOTICES.md"]
 authors = [
     {name = "LeanCert Contributors"}
 ]

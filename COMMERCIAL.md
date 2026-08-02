@@ -31,8 +31,10 @@ Subject to the controlling license terms, examples include:
 - non-commercial academic education and research;
 - internal benchmarking and security review;
 - a bounded organizational proof of concept; and
-- retaining and publishing generated reports, certificates, and proof
-  artifacts that do not reproduce a substantial portion of SDK source code.
+- retaining, publishing, and subsequently using generated reports,
+  certificates, and proof artifacts—including commercially—when they were
+  lawfully generated and do not reproduce a substantial portion of SDK source
+  code. This does not authorize continued execution of the SDK.
 
 ## Inquiries
 
