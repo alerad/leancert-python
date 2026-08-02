@@ -159,6 +159,13 @@ from .proving import EventualConfig, KrawczykCandidate, ProveConfig, SystemRootC
 # Client (for advanced users)
 from .client import LeanClient
 from .doctor import DoctorCheck, DoctorReport, diagnose
+from .verification import (
+    ArtifactVerification,
+    VerificationExitCode,
+    VerificationReport,
+    discover_exported_projects,
+    verify_exported_projects,
+)
 
 # Simplification utilities
 from .simplify import simplify, expand
@@ -324,6 +331,11 @@ __all__ = [
     "DoctorCheck",
     "DoctorReport",
     "diagnose",
+    "ArtifactVerification",
+    "VerificationExitCode",
+    "VerificationReport",
+    "discover_exported_projects",
+    "verify_exported_projects",
     # Simplification
     "simplify",
     "expand",

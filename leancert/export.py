@@ -28,6 +28,7 @@ from .result import (
     VerifiedEventualBound,
     VerifiedSystemRoot,
 )
+from .verification import write_export_manifest
 
 
 def _rat(value: Fraction) -> str:
@@ -262,6 +263,11 @@ def export_verified_bound(result: Verified, path: str, *, verify: bool = True):
             "```bash\nlake update\nlake build\n```\n",
             encoding="utf-8",
         )
+        write_export_manifest(
+            staging,
+            claim_id=claim_id,
+            certificate_digests=artifact.certificate_digests,
+        )
         if verify:
             lake = shutil.which("lake")
             if lake is None:
@@ -428,6 +434,11 @@ def export_verified_system_root(result: VerifiedSystemRoot, path: str, *, verify
             "```bash\nlake update\nlake build\n```\n",
             encoding="utf-8",
         )
+        write_export_manifest(
+            staging,
+            claim_id=artifact.claim_id,
+            certificate_digests=artifact.certificate_digests,
+        )
         if verify:
             lake = shutil.which("lake")
             if lake is None:
@@ -575,6 +586,11 @@ def export_verified_eventual_bound(
             "This project replays a fixed reciprocal-power cutoff certificate.\n\n"
             "```bash\nlake update\nlake build\n```\n",
             encoding="utf-8",
+        )
+        write_export_manifest(
+            staging,
+            claim_id=artifact.claim_id,
+            certificate_digests=artifact.certificate_digests,
         )
         if verify:
             lake = shutil.which("lake")
