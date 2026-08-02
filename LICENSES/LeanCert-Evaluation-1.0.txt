@@ -17,17 +17,28 @@ Earlier Material and Third-Party Material are excluded.
 
 "Community Evaluator" means a natural person acting for personal,
 educational, or non-commercial research purposes and not on behalf of a
-Commercial Organization.
+Organizational Evaluator.
 
 "Research Institution" means a nonprofit educational or nonprofit research
 institution using the Software solely for education or non-commercial
 research.
 
-"Commercial Organization" means any person or legal entity acting for a
-business, governmental, professional, or other organizational purpose that is
-not a Research Institution.
+"Organizational Evaluator" means any person or legal entity acting for a
+business, governmental, professional, or other organizational purpose and not
+qualifying as a Research Institution for the particular project at issue.
 
-"Evaluation Use" means internal, non-production testing, benchmarking,
+"Modified Software" means any modification, adaptation, or derivative work of
+the Software. Unless this license expressly states otherwise, every
+permission, condition, and restriction applying to the Software also applies
+to Modified Software.
+
+"Internal" means use by the licensee's employees, individual contractors,
+professional advisers, and security auditors acting solely on the licensee's
+behalf who are bound by confidentiality and use restrictions at least as
+protective as this license. Internal does not include customers, the public,
+unrelated third parties, or affiliates acting for their own purposes.
+
+"Evaluation Use" means Internal, non-production testing, benchmarking,
 security review, interoperability review, and proof-of-concept assessment to
 determine whether to obtain a commercial license. Evaluation Use does not
 include ordinary commercial research, production engineering, or product
@@ -35,7 +46,9 @@ development.
 
 "Production Use" means use of the Software or its functionality in live
 operations, in support of business operations, to provide services to another
-person, or in a product or service made available to another person.
+person, in a product or service made available to another person, or for
+operational safety-critical, clinical, financial, legal, or regulated
+decision-making.
 
 "Earlier Material" means material available at or before commit 716cb2d,
 including versions tagged `v0.3.0`, `v0.3.1`, and
@@ -54,16 +67,33 @@ a. each Community Evaluator and Research Institution a non-exclusive,
    modify, and execute the Software solely for personal evaluation, education,
    or non-commercial research; and
 
-b. each Commercial Organization a non-exclusive, worldwide,
+b. each Organizational Evaluator a non-exclusive, worldwide,
    non-transferable, non-sublicensable license to download, copy, modify, and
    execute the Software solely for Evaluation Use for ninety (90) consecutive
-   days beginning when that Commercial Organization first exercises any right
+   days beginning when that Organizational Evaluator first exercises any right
    granted by this license.
 
-Modifications may be made and shared only internally among persons covered by
-the same license grant and solely for the applicable permitted purpose. No
-right to distribute the Software or modifications outside that group is
-granted.
+Research Institution status applies separately to each project. Work funded
+by or performed primarily for the benefit of a commercial third party,
+contract research, paid services, product development, and institutional
+operations are not non-commercial research under this license.
+
+Subject to this license, the Licensor also grants a non-exclusive, worldwide,
+royalty-free, non-transferable, non-sublicensable patent license under patent
+claims controlled by the Licensor that are necessarily infringed by executing
+the Software as furnished by the Licensor, solely for a use permitted by this
+license. This patent license covers Modified Software only to the extent that
+the necessarily infringed claim would also be infringed by executing the
+Software as furnished by the Licensor.
+
+Modified Software may be made and shared only Internally among persons
+covered by the same license grant and solely for the applicable permitted
+purpose. No right to distribute the Software or Modified Software outside
+that group is granted.
+
+Use on privately controlled cloud infrastructure solely for a permitted use
+is allowed, provided that the Software and its functionality are not made
+available to customers, the public, or unrelated third parties.
 
 3. Generated Results and Evidence
 
@@ -97,8 +127,8 @@ e. making the Software or its functionality available as a network service,
    hosted service, software-as-a-service product, API, service bureau, or
    managed service;
 f. distributing, publishing, selling, sublicensing, leasing, or transferring
-   the Software or modifications to another person; or
-g. continuing Evaluation Use by a Commercial Organization after its
+   the Software or Modified Software to another person; or
+g. continuing Evaluation Use by an Organizational Evaluator after its
    ninety-day evaluation period expires.
 
 Commercial terms, including extensions of an evaluation period, require a

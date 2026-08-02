@@ -15,9 +15,11 @@ A written commercial license is required for uses including:
   the bounded proof-of-concept evaluation;
 - verification, certification, consulting, or other services delivered to
   customers;
-- embedding LeanCert in a product, build system, or regulated workflow;
+- embedding LeanCert in a product or build system, or relying on it for
+  operational safety-critical, clinical, financial, legal, or regulated
+  decision-making;
 - hosted verification, SaaS, API, service-bureau, or managed-service use; and
-- an organizational evaluation lasting longer than 90 days.
+- an Organizational Evaluator's evaluation lasting longer than 90 days.
 
 Commercial agreements may cover production rights, evaluation extensions,
 support, maintenance, service levels, security review, indemnity, and hosted
@@ -30,7 +32,8 @@ Subject to the controlling license terms, examples include:
 - local personal testing and learning;
 - non-commercial academic education and research;
 - internal benchmarking and security review;
-- a bounded organizational proof of concept; and
+- a bounded commercial, governmental, or other organizational proof of
+  concept;
 - retaining, publishing, and subsequently using generated reports,
   certificates, and proof artifacts—including commercially—when they were
   lawfully generated and do not reproduce a substantial portion of SDK source

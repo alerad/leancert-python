@@ -10,7 +10,7 @@ readme = "README.md"
 license = "LicenseRef-LeanCert-Evaluation-1.0 AND Apache-2.0"
 license-files = ["LICENSE", "LICENSES/*", "LICENSE_SCOPE.toml", "COMMERCIAL.md", "THIRD_PARTY_NOTICES.md"]
 authors = [
-    {name = "LeanCert Contributors"}
+    {name = "Alejandro Radisic"}
 ]
 keywords = [
     "formal-verification",

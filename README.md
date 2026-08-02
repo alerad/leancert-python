@@ -2,8 +2,9 @@
 
 > **v1 overhaul licensing:** Post-baseline Python SDK work is source-available
 > under a provisional evaluation license. Personal evaluation,
-> non-commercial research, education, and bounded organizational proofs of
-> concept are permitted; production and commercial use require written terms.
+> non-commercial research, education, and bounded commercial, governmental,
+> or other organizational proofs of concept are permitted; production and
+> commercial use require written terms.
 > Python SDK versions through `v0.3.2-apache-final`, LeanCert Core, and LeanCert
 > Bridge remain separately available under Apache-2.0. See [LICENSE](LICENSE).
 
@@ -154,9 +155,11 @@ certificate.
 Post-baseline v1 Python SDK material is source-available under the provisional
 [LeanCert Evaluation License 1.0](LICENSES/LeanCert-Evaluation-1.0.txt).
 Personal evaluation, education, non-commercial research, and a bounded
-90-day organizational proof of concept are permitted. Production deployment,
-commercial product development, customer services, and SaaS/API deployment
-require a separate written commercial license. Generated reports,
+90-day commercial, governmental, or other organizational proof of concept are
+permitted. Qualifying nonprofit education and non-commercial research are not
+subject to that 90-day limit. Production deployment, commercial product
+development, customer services, and SaaS/API deployment require a separate
+written commercial license. Generated reports,
 certificates, and proof artifacts lawfully created during permitted use remain
 free to retain, publish, and use, including commercially; this does not grant
 continued rights to execute the SDK. See [COMMERCIAL.md](COMMERCIAL.md) for the
