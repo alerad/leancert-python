@@ -1,10 +1,12 @@
 # LeanCert
 
-> **v1 overhaul licensing:** Work on the `v1-overhaul` development line is
-> provisionally all-rights-reserved while final community and commercial terms
-> are prepared. Python SDK versions through the baseline tagged
-> `v0.3.2-apache-final` remain Apache-2.0. LeanCert Core and LeanCert Bridge
-> remain separately available under Apache-2.0. See [LICENSE](LICENSE).
+> **v1 overhaul licensing:** Post-baseline Python SDK work is source-available
+> under a provisional evaluation license. Personal evaluation,
+> non-commercial research, education, and bounded commercial, governmental,
+> or other organizational proofs of concept are permitted; production and
+> commercial use require written terms.
+> Python SDK versions through `v0.3.2-apache-final`, LeanCert Core, and LeanCert
+> Bridge remain separately available under Apache-2.0. See [LICENSE](LICENSE).
 
 Formal verification for numerical Python code, powered by Lean4.
 
@@ -150,15 +152,23 @@ certificate.
 
 ## License
 
-The v1 Python SDK overhaul is currently covered by a provisional
-all-rights-reserved notice. No license is presently granted for post-baseline
-v1 code. Commercial internal use, network-service deployment, AI training or
-evaluation, and using generated artifacts to train or synthesize
-machine-learning data are expressly prohibited. Do not use or redistribute
-that development code without written permission. See [LICENSE](LICENSE) for
-the controlling terms.
+Post-baseline v1 Python SDK material is source-available under the provisional
+[LeanCert Evaluation License 1.0](LICENSES/LeanCert-Evaluation-1.0.txt).
+Personal evaluation, education, non-commercial research, and a bounded
+90-day commercial, governmental, or other organizational proof of concept are
+permitted. Qualifying nonprofit education and non-commercial research are not
+subject to that 90-day limit. Production deployment, commercial product
+development, customer services, and SaaS/API deployment require a separate
+written commercial license. Generated reports,
+certificates, and proof artifacts lawfully created during permitted use remain
+free to retain, publish, and use, including commercially; this does not grant
+continued rights to execute the SDK. See [COMMERCIAL.md](COMMERCIAL.md) for the
+commercial boundary and [LICENSE_SCOPE.toml](LICENSE_SCOPE.toml) for the
+authoritative source classification.
 
 Python SDK material through commit `716cb2d`, preserved by the tag
 `v0.3.2-apache-final`, remains available under Apache-2.0. LeanCert Core,
 LeanCert Bridge, and third-party components retain their separate licenses.
-See [LICENSE](LICENSE) and [LICENSES/Apache-2.0.txt](LICENSES/Apache-2.0.txt).
+See [LICENSE](LICENSE),
+[LICENSES/LeanCert-Evaluation-1.0.txt](LICENSES/LeanCert-Evaluation-1.0.txt),
+and [LICENSES/Apache-2.0.txt](LICENSES/Apache-2.0.txt).
