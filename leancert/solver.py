@@ -8,28 +8,142 @@ This module provides the main user-facing interface for verification.
 """
 
 from __future__ import annotations
-from fractions import Fraction
-import warnings
-from typing import Optional, Union, Any
 
-from .expr import Expr
-from .domain import Interval, Box, normalize_domain
-from .config import Config, Backend
-from .client import LeanClient, _parse_interval, _parse_rat, _parse_dyadic_interval
-from .result import (
-    BoundsResult, RootsResult, RootInterval, IntegralResult, Certificate,
-    UniqueRootResult, WitnessPoint, MinWitnessResult, MaxWitnessResult,
-    RootWitnessResult, FailureDiagnosis, LipschitzResult,
-    BoundCheck, BoundCheckEvidence, BridgeProvenance, CandidateCounterexample,
-    CheckedCounterexample, Verified, Rejected, Inconclusive, Unsupported,
-    DomainObstruction,
-)
-from .adaptive import AdaptiveResult, AdaptiveConfig, verify_bound_adaptive as _verify_bound_adaptive
-from .exceptions import VerificationFailed, VerificationInconclusive, DomainError
+import warnings
+from fractions import Fraction
+from typing import Any, Optional, Union
+
+import numpy as np
+
 from ._version import __version__
-from .rational import to_fraction
-from .simplify import simplify as _simplify_expr
+from .adaptive import AdaptiveConfig, AdaptiveResult
+from .adaptive import verify_bound_adaptive as _verify_bound_adaptive
+from .client import LeanClient, _parse_dyadic_interval, _parse_interval, _parse_rat
+from .config import Backend, Config
+from .domain import Box, Interval, normalize_domain
+from .exceptions import DomainError, VerificationFailed, VerificationInconclusive
+from .expr import Expr, _evaluate_batch
 from .expr import has_dependency as _has_dependency
+from .rational import to_fraction
+from .result import (
+    BoundCheck,
+    BoundCheckEvidence,
+    BoundsResult,
+    BridgeProvenance,
+    CandidateCounterexample,
+    Certificate,
+    CheckedCounterexample,
+    DomainObstruction,
+    FailureDiagnosis,
+    Inconclusive,
+    IntegralResult,
+    LipschitzResult,
+    MaxWitnessResult,
+    MinWitnessResult,
+    Rejected,
+    RootInterval,
+    RootsResult,
+    RootWitnessResult,
+    UniqueRootResult,
+    Unsupported,
+    Verified,
+    WitnessPoint,
+)
+from .simplify import simplify as _simplify_expr
+
+
+def _refine_counterexample_candidate(
+    expr: Expr,
+    box: Box,
+    initial: dict[str, Fraction],
+    direction: str,
+    *,
+    rounds: int = 10,
+) -> dict[str, Fraction]:
+    """Refine a search-produced point without granting it trusted status.
+
+    The search is deterministic and NumPy-batched.  Its result remains only a
+    candidate until ``check_bound`` encloses the exact rational point wholly
+    on the violating side of the requested bound.
+    """
+    names = box.var_order()
+    if not names:
+        return initial
+
+    lower = np.asarray([float(box[name].lo) for name in names], dtype=float)
+    upper = np.asarray([float(box[name].hi) for name in names], dtype=float)
+    seed = np.asarray([float(initial[name]) for name in names], dtype=float)
+    midpoint = (lower + upper) / 2.0
+
+    starts = [np.clip(seed, lower, upper), midpoint]
+    for index in range(len(names)):
+        left = seed.copy()
+        right = seed.copy()
+        left[index] = lower[index]
+        right[index] = upper[index]
+        starts.extend((left, right))
+    if len(names) <= 6:
+        for mask in range(1 << len(names)):
+            starts.append(np.where(
+                [(mask & (1 << index)) != 0 for index in range(len(names))],
+                upper,
+                lower,
+            ))
+
+    def evaluate(points: np.ndarray) -> np.ndarray:
+        environment = {
+            name: points[:, index]
+            for index, name in enumerate(names)
+        }
+        return _evaluate_batch(expr, environment)
+
+    def best_finite(points: np.ndarray) -> tuple[np.ndarray, float] | None:
+        values = evaluate(points)
+        finite = np.flatnonzero(np.isfinite(values))
+        if finite.size == 0:
+            return None
+        finite_values = values[finite]
+        relative = (
+            int(np.argmin(finite_values))
+            if direction == "lower"
+            else int(np.argmax(finite_values))
+        )
+        index = int(finite[relative])
+        return points[index].copy(), float(values[index])
+
+    try:
+        current_result = best_finite(np.asarray(starts, dtype=float))
+        if current_result is None:
+            return initial
+        current, current_value = current_result
+        step = (upper - lower) / 4.0
+
+        for _ in range(rounds):
+            candidates = [current]
+            for index in range(len(names)):
+                for sign in (-1.0, 1.0):
+                    candidate = current.copy()
+                    candidate[index] = np.clip(
+                        candidate[index] + sign * step[index],
+                        lower[index],
+                        upper[index],
+                    )
+                    candidates.append(candidate)
+            refined = best_finite(np.asarray(candidates, dtype=float))
+            if refined is None:
+                break
+            point, value = refined
+            improved = value < current_value if direction == "lower" else value > current_value
+            if improved:
+                current, current_value = point, value
+            else:
+                step /= 2.0
+            if np.all(step <= np.maximum((upper - lower) * 1e-9, 1e-15)):
+                break
+    except (ArithmeticError, TypeError, ValueError):
+        return initial
+
+    return {name: to_fraction(float(current[index])) for index, name in enumerate(names)}
 
 
 class Solver:
@@ -147,6 +261,7 @@ class Solver:
             and _has_dependency(expr)):
             # Create a new config with AFFINE backend
             from dataclasses import replace
+
             from .config import AffineConfig
             return replace(
                 config,
@@ -559,6 +674,12 @@ class Solver:
                 name: (_parse_rat(best_box[i]['lo']) + _parse_rat(best_box[i]['hi'])) / 2
                 for i, name in enumerate(var_names)
             }
+            point = _refine_counterexample_candidate(
+                original_expr,
+                box,
+                point,
+                direction,
+            )
             point_box = [Interval.point(point[name]).to_kernel() for name in var_names]
             point_response = client.check_bound(
                 expr_json, point_box,

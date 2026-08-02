@@ -1,13 +1,23 @@
 """Safety regressions for typed bound verification outcomes."""
 
 from fractions import Fraction
+from unittest.mock import patch
 
 import pytest
 
 from leancert import (
-    DomainObstruction, Inconclusive, Rejected, Solver, Unsupported, Verified, var,
+    DomainObstruction,
+    Inconclusive,
+    Rejected,
+    Solver,
+    Unsupported,
+    Verified,
+    var,
 )
+from leancert.domain import Box, Interval
 from leancert.exceptions import VerificationInconclusive
+from leancert.expr import _evaluate_batch
+from leancert.validation import CounterexampleVerifier, ValidationVerdict
 
 
 def rat(value: Fraction | int) -> dict[str, int]:
@@ -25,8 +35,10 @@ class FakeClient:
     def __init__(self, check_responses, optimize_response=None):
         self.check_responses = list(check_responses)
         self.optimize_response = optimize_response
+        self.check_calls = []
 
     def check_bound(self, *args, **kwargs):
+        self.check_calls.append((args, kwargs))
         return self.check_responses.pop(0)
 
     def global_max(self, *args, **kwargs):
@@ -147,6 +159,47 @@ def test_adaptive_checked_point_can_reject_bound():
 
     assert isinstance(result, Rejected)
     assert result.counterexample.enclosure.lo > 1
+
+
+def test_adaptive_refines_candidate_before_exact_checked_rejection():
+    optimize = {
+        "lo": rat(-1),
+        "hi": rat(0),
+        "bestBox": [{"lo": rat(Fraction(2, 5)), "hi": rat(Fraction(2, 5))}],
+    }
+    client = FakeClient([enclosure(0, 0, False)], optimize)
+    x = var("x")
+
+    result = Solver(client=client).verify_bound(
+        -(x - Fraction(4, 5)) ** 2,
+        {"x": (0, 1)},
+        upper=Fraction(-1, 20),
+        method="adaptive",
+    )
+
+    assert isinstance(result, Rejected)
+    point_box = client.check_calls[0][0][1]
+    checked_point = Fraction(point_box[0]["lo"]["n"], point_box[0]["lo"]["d"])
+    assert Fraction(3, 4) <= checked_point <= Fraction(17, 20)
+    assert result.counterexample.values["x"] == checked_point
+
+
+def test_monte_carlo_evaluates_candidates_as_one_batch():
+    x = var("x")
+    domain = Box({"x": Interval(Fraction(0), Fraction(1))})
+    verifier = CounterexampleVerifier()
+
+    with patch("leancert.validation._evaluate_batch", wraps=_evaluate_batch) as evaluate:
+        result = verifier.monte_carlo_verify(
+            x**2,
+            domain,
+            claimed_min=0,
+            claimed_max=1,
+            num_samples=32,
+        )
+
+    assert result.verdict is ValidationVerdict.CONFIRMED
+    evaluate.assert_called_once()
 
 
 def test_compatibility_wrapper_distinguishes_outcomes():

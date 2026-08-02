@@ -15,15 +15,17 @@ The goal is to reduce the false positive rate from ~70% to <20%.
 
 from __future__ import annotations
 
-import re
 import math
+import re
 from dataclasses import dataclass, field
-from typing import Optional, Union, Any, Callable
-from fractions import Fraction
 from enum import Enum
+from fractions import Fraction
+from typing import Any, Callable, Optional, Union
 
-from .expr import Expr, Variable, EvalEnv
+import numpy as np
+
 from .domain import Box, Interval
+from .expr import EvalEnv, Expr, Variable, _evaluate_batch
 from .result import BoundsResult
 
 
@@ -487,22 +489,42 @@ class CounterexampleVerifier:
         """
         points = self.generate_test_points(domain, num_samples)
 
-        observed_min = float('inf')
-        observed_max = float('-inf')
-        worst_point_min = None
-        worst_point_max = None
+        if not points:
+            return ValidationResult(
+                verdict=ValidationVerdict.NEEDS_REVIEW,
+                confidence=0.5,
+                reason="No concrete sample points were available.",
+            )
 
-        for point in points:
-            try:
-                value = float(expr.evaluate(point))
-                if value < observed_min:
-                    observed_min = value
-                    worst_point_min = point.copy()
-                if value > observed_max:
-                    observed_max = value
-                    worst_point_max = point.copy()
-            except Exception:
-                continue
+        var_names = domain.var_order()
+        batch = {
+            name: np.asarray([point[name] for point in points], dtype=float)
+            for name in var_names
+        }
+        try:
+            values = _evaluate_batch(expr, batch)
+        except Exception as exc:
+            return ValidationResult(
+                verdict=ValidationVerdict.NEEDS_REVIEW,
+                confidence=0.5,
+                reason=f"Could not evaluate sample batch: {exc}",
+            )
+
+        finite = np.flatnonzero(np.isfinite(values))
+        if finite.size == 0:
+            return ValidationResult(
+                verdict=ValidationVerdict.NEEDS_REVIEW,
+                confidence=0.5,
+                reason="No finite concrete evaluations were available.",
+            )
+
+        finite_values = values[finite]
+        min_index = int(finite[int(np.argmin(finite_values))])
+        max_index = int(finite[int(np.argmax(finite_values))])
+        observed_min = float(values[min_index])
+        observed_max = float(values[max_index])
+        worst_point_min = points[min_index].copy()
+        worst_point_max = points[max_index].copy()
 
         # Check if observed values are within claimed bounds
         min_ok = observed_min >= claimed_min - self.tolerance

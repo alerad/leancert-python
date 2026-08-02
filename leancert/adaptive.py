@@ -22,24 +22,27 @@ Key Features:
 """
 
 from __future__ import annotations
-from dataclasses import dataclass, field
-from fractions import Fraction
-from typing import Optional, Union, Callable, Any, TYPE_CHECKING
-from enum import Enum
+
 import concurrent.futures
 import threading
 import time
+from dataclasses import dataclass, field
+from enum import Enum
+from fractions import Fraction
+from typing import TYPE_CHECKING, Any, Callable, Optional, Union
+
+import numpy as np
 
 if TYPE_CHECKING:
-    from .solver import Solver
     from .expr import Expr
+    from .solver import Solver
 
-from .domain import Interval, Box, normalize_domain
-from .config import Config
-from .result import Certificate, FailureDiagnosis, Verified
 from ._version import __version__
+from .config import Config
+from .domain import Box, Interval, normalize_domain
+from .expr import _evaluate_batch
 from .rational import to_fraction
-
+from .result import Certificate, FailureDiagnosis, Verified
 
 # Type alias for progress callback
 # (current_splits, max_splits, current_depth, verified_count, failed_count) -> None
@@ -380,28 +383,23 @@ class GradientEstimator:
         var_names = box.var_order()
         gradients = {}
 
-        # Compute center point
+        # Evaluate the center and all forward perturbations in one NumPy batch.
         center = {name: float(box[name].midpoint()) for name in var_names}
-
-        # Evaluate at center
         try:
-            center_val = float(expr.evaluate(center))
+            batch = {
+                name: np.full(len(var_names) + 1, value, dtype=float)
+                for name, value in center.items()
+            }
+            for index, name in enumerate(var_names, start=1):
+                batch[name][index] += delta
+            values = _evaluate_batch(expr, batch)
+            center_val = float(values[0])
         except Exception:
-            # If evaluation fails, return zeros
             return {name: 0.0 for name in var_names}
 
-        # Finite difference for each variable
-        for name in var_names:
-            try:
-                # Forward difference
-                perturbed = center.copy()
-                perturbed[name] = center[name] + delta
-
-                perturbed_val = float(expr.evaluate(perturbed))
-                gradient = (perturbed_val - center_val) / delta
-                gradients[name] = abs(gradient)
-            except Exception:
-                gradients[name] = 0.0
+        for index, name in enumerate(var_names, start=1):
+            gradient = (float(values[index]) - center_val) / delta
+            gradients[name] = abs(gradient) if np.isfinite(gradient) else 0.0
 
         return gradients
 
@@ -476,8 +474,12 @@ class AlgebraicAnalyzer:
         if width <= 0:
             return candidates
 
-        # Sample points along this variable
-        samples = [lo + (hi - lo) * i / (num_samples - 1) for i in range(num_samples)]
+        if num_samples < 3:
+            return candidates
+
+        # Sample points along this variable in one expression traversal.
+        sample_array = np.linspace(lo, hi, num_samples)
+        samples = sample_array.tolist()
 
         # Compute function values and estimate derivatives
         values = []
@@ -490,11 +492,18 @@ class AlgebraicAnalyzer:
         }
 
         try:
-            for x in samples:
-                point = base_point.copy()
-                point[var_name] = x
-                val = float(expr.evaluate(point))
-                values.append(val)
+            batch = {
+                name: (
+                    sample_array
+                    if name == var_name
+                    else np.full(num_samples, value, dtype=float)
+                )
+                for name, value in base_point.items()
+            }
+            sampled_values = _evaluate_batch(expr, batch)
+            if not np.all(np.isfinite(sampled_values)):
+                return candidates
+            values = sampled_values.tolist()
 
             # Estimate derivatives using central differences
             for i in range(1, len(samples) - 1):
@@ -1214,120 +1223,161 @@ class CEGARVerifier:
         if max_workers is None:
             max_workers = min(8, (self.adaptive_config.max_splits + 1))
 
+        # Each executor thread lazily receives its own bridge process.  A
+        # single LeanClient serializes request/response I/O, so sharing the
+        # caller's solver here would make bridge-bound work effectively
+        # sequential despite the thread pool.
+        source_client = self.solver._ensure_client()
+        worker_local = threading.local()
+        worker_clients = []
+        worker_clients_lock = threading.Lock()
+
+        def worker_solver() -> 'Solver':
+            from .client import LeanClient
+            from .solver import Solver
+
+            # Preserve custom/fake client behavior.  The normal SDK path uses
+            # exactly LeanClient and therefore receives isolated workers.
+            if not isinstance(source_client, LeanClient):
+                return self.solver
+            solver = getattr(worker_local, "solver", None)
+            if solver is None:
+                client = LeanClient(binary_path=source_client.binary_path)
+                solver = Solver(
+                    client=client,
+                    auto_simplify=self.solver._auto_simplify,
+                    auto_affine=self.solver._auto_affine,
+                )
+                worker_local.solver = solver
+                with worker_clients_lock:
+                    worker_clients.append(client)
+            return solver
+
+        def verify_one(subdomain: Subdomain) -> SubdomainResult:
+            return self._verify_subdomain(
+                expr,
+                subdomain,
+                upper,
+                lower,
+                solver=worker_solver(),
+            )
+
         # Start with root
         pending: list[Subdomain] = [self._subdomains[0]]
         futures: dict[concurrent.futures.Future, Subdomain] = {}
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-            while pending or futures:
-                # Submit new work
-                while pending and len(futures) < max_workers:
-                    subdomain = pending.pop(0)
-                    future = executor.submit(
-                        self._verify_subdomain, expr, subdomain, upper, lower
+        try:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+                while pending or futures:
+                    # Submit new work
+                    while pending and len(futures) < max_workers:
+                        subdomain = pending.pop(0)
+                        future = executor.submit(verify_one, subdomain)
+                        futures[future] = subdomain
+
+                    if not futures:
+                        break
+
+                    # Wait for any completion
+                    done, _ = concurrent.futures.wait(
+                        futures.keys(),
+                        timeout=0.1,
+                        return_when=concurrent.futures.FIRST_COMPLETED,
                     )
-                    futures[future] = subdomain
 
-                if not futures:
-                    break
+                    for future in done:
+                        subdomain = futures.pop(future)
+                        try:
+                            result = future.result()
+                        except Exception:
+                            result = SubdomainResult(
+                                subdomain=subdomain,
+                                verified=False,
+                                diagnosis=None,
+                            )
 
-                # Wait for any completion
-                done, _ = concurrent.futures.wait(
-                    futures.keys(),
-                    timeout=0.1,
-                    return_when=concurrent.futures.FIRST_COMPLETED,
-                )
+                        with self._lock:
+                            self._results.append(result)
 
-                for future in done:
-                    subdomain = futures.pop(future)
-                    try:
-                        result = future.result()
-                    except Exception as e:
-                        result = SubdomainResult(
-                            subdomain=subdomain,
-                            verified=False,
-                            diagnosis=None,
-                        )
+                        if result.verified:
+                            self._report_progress()
+                            continue
 
-                    with self._lock:
-                        self._results.append(result)
+                        # Check if we should split
+                        with self._lock:
+                            should_split = DomainSplitter.should_continue_splitting(
+                                subdomain.box,
+                                self.adaptive_config,
+                                subdomain.depth,
+                                self._total_splits,
+                            )
 
-                    if result.verified:
-                        self._report_progress()
-                        continue
+                        if not should_split:
+                            self._report_progress()
+                            continue
 
-                    # Check if we should split
-                    with self._lock:
-                        should_split = DomainSplitter.should_continue_splitting(
+                        # Reuse gradients computed with the leaf result.
+                        gradient_info = result.gradient_info
+                        algebraic_candidate = None
+
+                        if self.adaptive_config.compute_gradients and gradient_info is None:
+                            gradient_info = GradientEstimator.estimate_gradients(
+                                self.solver, expr, subdomain.box, self.solver_config
+                            )
+
+                        # Compute algebraic analysis for ALGEBRAIC or AUTO strategies
+                        strategy = self.adaptive_config.strategy
+                        if strategy in (SplitStrategy.ALGEBRAIC, SplitStrategy.AUTO):
+                            algebraic_candidate = AlgebraicAnalyzer.get_best_split(
+                                expr, subdomain.box
+                            )
+
+                        if strategy == SplitStrategy.AUTO:
+                            if algebraic_candidate and algebraic_candidate.score >= 0.5:
+                                strategy = SplitStrategy.ALGEBRAIC
+                            elif gradient_info and any(g > 0 for g in gradient_info.values()):
+                                strategy = SplitStrategy.GRADIENT_GUIDED
+
+                        left_box, right_box, split_var = DomainSplitter.split_box(
                             subdomain.box,
-                            self.adaptive_config,
-                            subdomain.depth,
-                            self._total_splits,
+                            strategy,
+                            result.diagnosis,
+                            gradient_info,
+                            expr=expr,
+                            algebraic_candidate=algebraic_candidate,
                         )
 
-                    if not should_split:
+                        with self._lock:
+                            self._total_splits += 1
+                            self._results.remove(result)
+
+                            self._subdomain_id += 1
+                            left = Subdomain(
+                                box=left_box,
+                                parent_id=subdomain.id,
+                                split_var=split_var,
+                                split_side='left',
+                                depth=subdomain.depth + 1,
+                                id=self._subdomain_id,
+                            )
+
+                            self._subdomain_id += 1
+                            right = Subdomain(
+                                box=right_box,
+                                parent_id=subdomain.id,
+                                split_var=split_var,
+                                split_side='right',
+                                depth=subdomain.depth + 1,
+                                id=self._subdomain_id,
+                            )
+
+                            self._subdomains.extend([left, right])
+
+                        pending.extend([left, right])
                         self._report_progress()
-                        continue
-
-                    # Split and add children
-                    gradient_info = None
-                    algebraic_candidate = None
-
-                    if self.adaptive_config.compute_gradients:
-                        gradient_info = GradientEstimator.estimate_gradients(
-                            self.solver, expr, subdomain.box, self.solver_config
-                        )
-
-                    # Compute algebraic analysis for ALGEBRAIC or AUTO strategies
-                    strategy = self.adaptive_config.strategy
-                    if strategy in (SplitStrategy.ALGEBRAIC, SplitStrategy.AUTO):
-                        algebraic_candidate = AlgebraicAnalyzer.get_best_split(
-                            expr, subdomain.box
-                        )
-
-                    if strategy == SplitStrategy.AUTO:
-                        if algebraic_candidate and algebraic_candidate.score >= 0.5:
-                            strategy = SplitStrategy.ALGEBRAIC
-                        elif gradient_info and any(g > 0 for g in gradient_info.values()):
-                            strategy = SplitStrategy.GRADIENT_GUIDED
-
-                    left_box, right_box, split_var = DomainSplitter.split_box(
-                        subdomain.box,
-                        strategy,
-                        result.diagnosis,
-                        gradient_info,
-                        expr=expr,
-                        algebraic_candidate=algebraic_candidate,
-                    )
-
-                    with self._lock:
-                        self._total_splits += 1
-                        self._results.remove(result)
-
-                        self._subdomain_id += 1
-                        left = Subdomain(
-                            box=left_box,
-                            parent_id=subdomain.id,
-                            split_var=split_var,
-                            split_side='left',
-                            depth=subdomain.depth + 1,
-                            id=self._subdomain_id,
-                        )
-
-                        self._subdomain_id += 1
-                        right = Subdomain(
-                            box=right_box,
-                            parent_id=subdomain.id,
-                            split_var=split_var,
-                            split_side='right',
-                            depth=subdomain.depth + 1,
-                            id=self._subdomain_id,
-                        )
-
-                        self._subdomains.extend([left, right])
-
-                    pending.extend([left, right])
-                    self._report_progress()
+        finally:
+            for client in worker_clients:
+                client.close()
 
     def _process_subdomain(
         self,
@@ -1356,10 +1406,10 @@ class CEGARVerifier:
             return
 
         # Compute gradients if enabled
-        gradient_info = None
+        gradient_info = result.gradient_info
         algebraic_candidate = None
 
-        if self.adaptive_config.compute_gradients:
+        if self.adaptive_config.compute_gradients and gradient_info is None:
             gradient_info = GradientEstimator.estimate_gradients(
                 self.solver, expr, subdomain.box, self.solver_config
             )
@@ -1420,20 +1470,22 @@ class CEGARVerifier:
         subdomain: Subdomain,
         upper: Optional[float],
         lower: Optional[float],
+        solver: Optional['Solver'] = None,
     ) -> SubdomainResult:
         """Verify bound on a single subdomain."""
         start = time.time()
         gradient_info = None
+        active_solver = self.solver if solver is None else solver
 
         try:
             # Compute gradients if enabled (for future splits)
             if self.adaptive_config.compute_gradients:
                 gradient_info = GradientEstimator.estimate_gradients(
-                    self.solver, expr, subdomain.box, self.solver_config
+                    active_solver, expr, subdomain.box, self.solver_config
                 )
 
             # Try verification
-            outcome = self.solver.verify_bound(
+            outcome = active_solver.verify_bound(
                 expr,
                 subdomain.box,
                 upper=upper,
@@ -1446,12 +1498,12 @@ class CEGARVerifier:
                 # Contract 2.2 exposes LeanCert's checked rational optimizer as
                 # a typed fallback.  It is useful when the replayable, fixed
                 # bound checker is sound but too coarse on this leaf.
-                client = self.solver._ensure_client()
+                client = active_solver._ensure_client()
                 contract = client.bridge_contract
                 capability = contract.capability("verify_adaptive")
                 adaptive_verified = capability is not None
                 if adaptive_verified:
-                    expr_json, checked_box = self.solver._prepare_request(
+                    expr_json, checked_box = active_solver._prepare_request(
                         expr, subdomain.box
                     )
                     box_json = checked_box.to_kernel_list()
@@ -1493,7 +1545,7 @@ class CEGARVerifier:
 
         except Exception as e:
             # Verification failed - get diagnosis
-            diagnosis = self.solver.diagnose_bound_failure(
+            diagnosis = active_solver.diagnose_bound_failure(
                 expr,
                 subdomain.box,
                 upper=upper,

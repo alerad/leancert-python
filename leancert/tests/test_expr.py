@@ -1,8 +1,10 @@
 # Tests for expr.py - Symbolic expressions
 # TDD: Write tests first, then implement
 
-import pytest
 from fractions import Fraction
+
+import numpy as np
+import pytest
 
 
 class TestVariable:
@@ -112,7 +114,7 @@ class TestOperatorOverloading:
         assert expr.free_vars() == frozenset({'x'})
 
     def test_complex_expression(self):
-        from leancert.expr import var, sin, cos
+        from leancert.expr import cos, sin, var
         x = var('x')
         y = var('y')
         expr = x**2 + sin(y) * 2 - cos(x + y)
@@ -123,37 +125,37 @@ class TestUnaryFunctions:
     """Tests for sin, cos, exp, log, etc."""
 
     def test_sin(self):
-        from leancert.expr import var, sin
+        from leancert.expr import sin, var
         x = var('x')
         expr = sin(x)
         assert expr.free_vars() == frozenset({'x'})
 
     def test_cos(self):
-        from leancert.expr import var, cos
+        from leancert.expr import cos, var
         x = var('x')
         expr = cos(x)
         assert expr.free_vars() == frozenset({'x'})
 
     def test_exp(self):
-        from leancert.expr import var, exp
+        from leancert.expr import exp, var
         x = var('x')
         expr = exp(x)
         assert expr.free_vars() == frozenset({'x'})
 
     def test_log(self):
-        from leancert.expr import var, log
+        from leancert.expr import log, var
         x = var('x')
         expr = log(x)
         assert expr.free_vars() == frozenset({'x'})
 
     def test_sqrt(self):
-        from leancert.expr import var, sqrt
+        from leancert.expr import sqrt, var
         x = var('x')
         expr = sqrt(x)
         assert expr.free_vars() == frozenset({'x'})
 
     def test_nested_functions(self):
-        from leancert.expr import var, sin, exp
+        from leancert.expr import exp, sin, var
         x = var('x')
         expr = sin(exp(x))
         assert expr.free_vars() == frozenset({'x'})
@@ -193,7 +195,7 @@ class TestCompilation:
         }
 
     def test_compile_sin(self):
-        from leancert.expr import var, sin
+        from leancert.expr import sin, var
         x = var('x')
         expr = sin(x)
         kernel_expr = expr.compile(['x'])
@@ -203,7 +205,7 @@ class TestCompilation:
         }
 
     def test_compile_complex(self):
-        from leancert.expr import var, sin
+        from leancert.expr import sin, var
         x = var('x')
         expr = x**2 + sin(x)
         kernel_expr = expr.compile(['x'])
@@ -213,8 +215,8 @@ class TestCompilation:
         assert kernel_expr['e2']['kind'] == 'sin'
 
     def test_compile_missing_variable_raises(self):
-        from leancert.expr import var
         from leancert.exceptions import CompilationError
+        from leancert.expr import var
         x = var('x')
         with pytest.raises(CompilationError, match="Variable 'x' not in domain"):
             x.compile(['y', 'z'])
@@ -256,38 +258,38 @@ class TestHyperbolicFunctions:
     """Tests for hyperbolic functions: sinh, cosh, tanh, arsinh, atanh."""
 
     def test_sinh(self):
-        from leancert.expr import var, sinh
+        from leancert.expr import sinh, var
         x = var('x')
         expr = sinh(x)
         assert expr.free_vars() == frozenset({'x'})
 
     def test_cosh(self):
-        from leancert.expr import var, cosh
+        from leancert.expr import cosh, var
         x = var('x')
         expr = cosh(x)
         assert expr.free_vars() == frozenset({'x'})
 
     def test_tanh(self):
-        from leancert.expr import var, tanh
+        from leancert.expr import tanh, var
         x = var('x')
         expr = tanh(x)
         assert expr.free_vars() == frozenset({'x'})
 
     def test_arsinh(self):
-        from leancert.expr import var, arsinh
+        from leancert.expr import arsinh, var
         x = var('x')
         expr = arsinh(x)
         assert expr.free_vars() == frozenset({'x'})
 
     def test_atanh(self):
-        from leancert.expr import var, atanh
+        from leancert.expr import atanh, var
         x = var('x')
         expr = atanh(x)
         assert expr.free_vars() == frozenset({'x'})
 
     def test_sinh_compile(self):
         """sinh compiles to a kernel primitive."""
-        from leancert.expr import var, sinh
+        from leancert.expr import sinh, var
         x = var('x')
         expr = sinh(x)
         kernel_expr = expr.compile(['x'])
@@ -295,7 +297,7 @@ class TestHyperbolicFunctions:
 
     def test_cosh_compile(self):
         """cosh compiles to a kernel primitive."""
-        from leancert.expr import var, cosh
+        from leancert.expr import cosh, var
         x = var('x')
         expr = cosh(x)
         kernel_expr = expr.compile(['x'])
@@ -303,7 +305,7 @@ class TestHyperbolicFunctions:
 
     def test_tanh_compile(self):
         """tanh compiles to a kernel primitive."""
-        from leancert.expr import var, tanh
+        from leancert.expr import tanh, var
         x = var('x')
         expr = tanh(x)
         kernel_expr = expr.compile(['x'])
@@ -311,7 +313,7 @@ class TestHyperbolicFunctions:
 
     def test_arsinh_compile(self):
         """arsinh is a primitive in the kernel."""
-        from leancert.expr import var, arsinh
+        from leancert.expr import arsinh, var
         x = var('x')
         expr = arsinh(x)
         kernel_expr = expr.compile(['x'])
@@ -319,7 +321,7 @@ class TestHyperbolicFunctions:
 
     def test_atanh_compile(self):
         """atanh is a primitive in the kernel."""
-        from leancert.expr import var, atanh
+        from leancert.expr import atanh, var
         x = var('x')
         expr = atanh(x)
         kernel_expr = expr.compile(['x'])
@@ -330,14 +332,14 @@ class TestInvFunction:
     """Tests for the explicit inverse (reciprocal) function."""
 
     def test_inv(self):
-        from leancert.expr import var, inv
+        from leancert.expr import inv, var
         x = var('x')
         expr = inv(x)
         assert expr.free_vars() == frozenset({'x'})
 
     def test_inv_compile(self):
         """inv is a primitive in the kernel."""
-        from leancert.expr import var, inv
+        from leancert.expr import inv, var
         x = var('x')
         expr = inv(x)
         kernel_expr = expr.compile(['x'])
@@ -359,14 +361,14 @@ class TestSpecialFunctions:
 
     def test_sinc(self):
         """sinc function basic creation and free vars."""
-        from leancert.expr import var, sinc
+        from leancert.expr import sinc, var
         x = var('x')
         expr = sinc(x)
         assert expr.free_vars() == frozenset({'x'})
 
     def test_sinc_compile(self):
         """sinc is a primitive in the kernel."""
-        from leancert.expr import var, sinc
+        from leancert.expr import sinc, var
         x = var('x')
         expr = sinc(x)
         kernel_expr = expr.compile(['x'])
@@ -375,14 +377,14 @@ class TestSpecialFunctions:
         assert kernel_expr['e']['idx'] == 0
 
     def test_sinc_repr(self):
-        from leancert.expr import var, sinc
+        from leancert.expr import sinc, var
         x = var('x')
         expr = sinc(x)
         assert repr(expr) == "sinc(var('x'))"
 
     def test_sinc_nested(self):
         """sinc of a complex expression."""
-        from leancert.expr import var, sinc, sin
+        from leancert.expr import sin, sinc, var
         x = var('x')
         expr = sinc(sin(x))
         assert expr.free_vars() == frozenset({'x'})
@@ -392,14 +394,14 @@ class TestSpecialFunctions:
 
     def test_erf(self):
         """erf function basic creation and free vars."""
-        from leancert.expr import var, erf
+        from leancert.expr import erf, var
         x = var('x')
         expr = erf(x)
         assert expr.free_vars() == frozenset({'x'})
 
     def test_erf_compile(self):
         """erf is a primitive in the kernel."""
-        from leancert.expr import var, erf
+        from leancert.expr import erf, var
         x = var('x')
         expr = erf(x)
         kernel_expr = expr.compile(['x'])
@@ -408,14 +410,14 @@ class TestSpecialFunctions:
         assert kernel_expr['e']['idx'] == 0
 
     def test_erf_repr(self):
-        from leancert.expr import var, erf
+        from leancert.expr import erf, var
         x = var('x')
         expr = erf(x)
         assert repr(expr) == "erf(var('x'))"
 
     def test_erf_in_expression(self):
         """erf used in a larger expression (like Black-Scholes)."""
-        from leancert.expr import var, erf, exp, sqrt, const
+        from leancert.expr import const, erf, exp, sqrt, var
         x = var('x')
         # A simplified part of Black-Scholes CDF: (1 + erf(x/sqrt(2)))/2
         expr = (const(1) + erf(x / sqrt(const(2)))) / const(2)
@@ -423,7 +425,7 @@ class TestSpecialFunctions:
 
     def test_sinc_vs_sin_over_x(self):
         """sinc(x) is NOT the same as sin(x)/x in terms of AST."""
-        from leancert.expr import var, sinc, sin
+        from leancert.expr import sin, sinc, var
         x = var('x')
         sinc_expr = sinc(x)
         sin_over_x = sin(x) / x
@@ -435,3 +437,38 @@ class TestSpecialFunctions:
         # sinc is a primitive, sin/x is a division
         assert sinc_kernel['kind'] == 'sinc'
         assert sin_over_x_kernel['kind'] == 'div'
+
+
+class TestBatchEvaluation:
+    """Tests for the internal, heuristic-only NumPy evaluator."""
+
+    def test_batch_matches_scalar_evaluation(self):
+        from leancert.expr import Max, Min, _evaluate_batch, cos, exp, sin, var
+
+        x = var("x")
+        y = var("y")
+        expr = Max(sin(x) + exp(y / 10), Min(cos(y), x**2))
+        x_values = np.linspace(-0.5, 0.5, 11)
+        y_values = np.linspace(0.1, 1.1, 11)
+
+        actual = _evaluate_batch(expr, {"x": x_values, "y": y_values})
+        expected = np.asarray([
+            float(expr.evaluate({"x": x_value, "y": y_value}))
+            for x_value, y_value in zip(x_values, y_values, strict=True)
+        ])
+
+        np.testing.assert_allclose(actual, expected)
+
+    def test_batch_broadcasts_constants_and_inputs(self):
+        from leancert.expr import _evaluate_batch, const, var
+
+        x = var("x")
+        values = _evaluate_batch(const(2) + x, {"x": np.asarray([1.0, 2.0, 3.0])})
+
+        np.testing.assert_array_equal(values, np.asarray([3.0, 4.0, 5.0]))
+
+    def test_batch_requires_every_free_variable(self):
+        from leancert.expr import _evaluate_batch, var
+
+        with pytest.raises(ValueError, match="not in environment"):
+            _evaluate_batch(var("missing"), {"x": np.asarray([1.0])})
