@@ -16,19 +16,21 @@ Example:
 """
 
 from __future__ import annotations
-from abc import ABC, abstractmethod
+
 import builtins
+import math
+from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from fractions import Fraction
-from typing import Union, Any, FrozenSet
-import math
+from typing import Any, FrozenSet, Mapping, Union
+
+import numpy as np
 
 # Store reference to builtin abs before we shadow it
 builtins_abs = builtins.abs
 
 from .exceptions import CompilationError
 from .rational import to_fraction as _to_nice_fraction
-
 
 # Type for evaluation environment
 EvalEnv = dict[str, Union[float, Fraction]]
@@ -798,6 +800,90 @@ class MaxExpr(Expr):
 
     def __repr__(self) -> str:
         return f"Max({self.e1}, {self.e2})"
+
+
+def _evaluate_batch(expr: Expr, env: Mapping[str, Any]) -> np.ndarray:
+    """Evaluate an expression over broadcastable NumPy inputs.
+
+    This is intentionally an internal heuristic evaluator.  It preserves the
+    scalar ``Expr.evaluate`` contract while allowing search and sampling code
+    to amortize Python traversal over a complete candidate batch.  Its output
+    is never proof evidence; promising points must still be checked by the
+    bridge using exact rational inputs.
+    """
+    arrays = {name: np.asarray(value, dtype=float) for name, value in env.items()}
+    if arrays:
+        names = tuple(arrays)
+        broadcast = np.broadcast_arrays(*(arrays[name] for name in names))
+        arrays = dict(zip(names, broadcast))
+        output_shape = broadcast[0].shape
+    else:
+        output_shape = ()
+
+    def evaluate(node: Expr) -> Any:
+        if isinstance(node, Variable):
+            try:
+                return arrays[node.name]
+            except KeyError as exc:
+                raise ValueError(f"Variable '{node.name}' not in environment") from exc
+        if isinstance(node, Const):
+            return float(node.value)
+        if isinstance(node, Add):
+            return evaluate(node.e1) + evaluate(node.e2)
+        if isinstance(node, Sub):
+            return evaluate(node.e1) - evaluate(node.e2)
+        if isinstance(node, Mul):
+            return evaluate(node.e1) * evaluate(node.e2)
+        if isinstance(node, Div):
+            return evaluate(node.e1) / evaluate(node.e2)
+        if isinstance(node, Pow):
+            return evaluate(node.base) ** node.n
+        if isinstance(node, Neg):
+            return -evaluate(node.e)
+        if isinstance(node, Sin):
+            return np.sin(evaluate(node.e))
+        if isinstance(node, Cos):
+            return np.cos(evaluate(node.e))
+        if isinstance(node, Exp):
+            return np.exp(evaluate(node.e))
+        if isinstance(node, Log):
+            return np.log(evaluate(node.e))
+        if isinstance(node, Sqrt):
+            return np.sqrt(evaluate(node.e))
+        if isinstance(node, Tan):
+            return np.tan(evaluate(node.e))
+        if isinstance(node, Atan):
+            return np.arctan(evaluate(node.e))
+        if isinstance(node, Inv):
+            return 1.0 / evaluate(node.e)
+        if isinstance(node, Arsinh):
+            return np.arcsinh(evaluate(node.e))
+        if isinstance(node, Atanh):
+            return np.arctanh(evaluate(node.e))
+        if isinstance(node, Sinc):
+            return np.sinc(evaluate(node.e) / np.pi)
+        if isinstance(node, Erf):
+            values = np.asarray(evaluate(node.e), dtype=float)
+            return np.frompyfunc(math.erf, 1, 1)(values).astype(float)
+        if isinstance(node, Sinh):
+            return np.sinh(evaluate(node.e))
+        if isinstance(node, Cosh):
+            return np.cosh(evaluate(node.e))
+        if isinstance(node, Tanh):
+            return np.tanh(evaluate(node.e))
+        if isinstance(node, Abs):
+            return np.abs(evaluate(node.e))
+        if isinstance(node, MinExpr):
+            return np.minimum(evaluate(node.e1), evaluate(node.e2))
+        if isinstance(node, MaxExpr):
+            return np.maximum(evaluate(node.e1), evaluate(node.e2))
+        raise TypeError(f"Unsupported expression node: {type(node).__name__}")
+
+    with np.errstate(all="ignore"):
+        result = np.asarray(evaluate(expr), dtype=float)
+    if result.shape != output_shape:
+        result = np.broadcast_to(result, output_shape)
+    return result
 
 
 def abs_(e: ExprLike) -> Abs:

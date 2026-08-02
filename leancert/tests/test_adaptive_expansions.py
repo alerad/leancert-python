@@ -8,28 +8,30 @@ Tests for adaptive verification expansions:
 - Volume-based termination
 """
 
-import pytest
-from fractions import Fraction
-from unittest.mock import Mock, patch
+import sys
 import threading
 import time
+from fractions import Fraction
+from unittest.mock import Mock, patch
 
-from leancert import var, sin, cos, exp, Solver
-from leancert.domain import Box, Interval
-from leancert.config import Config
+import pytest
+
+from leancert import Solver, cos, exp, sin, var
 from leancert.adaptive import (
     AdaptiveConfig,
     AdaptiveResult,
+    CEGARVerifier,
+    DomainSplitter,
+    GradientEstimator,
     SplitStrategy,
     Subdomain,
     SubdomainResult,
     SubdomainTreeVisualizer,
-    GradientEstimator,
-    DomainSplitter,
-    CEGARVerifier,
     verify_bound_adaptive,
 )
-
+from leancert.client import LeanClient
+from leancert.config import Config
+from leancert.domain import Box, Interval
 
 # =============================================================================
 # Parallel Verification Tests
@@ -96,6 +98,42 @@ class TestParallelVerification:
         # Should have failed subdomains
         assert result.verified is False
         assert len(result.failed_subdomains) > 0
+
+    def test_parallel_workers_use_distinct_bridge_clients(self):
+        source_client = LeanClient(binary_path=sys.executable)
+        solver = Solver(client=source_client)
+        verifier = CEGARVerifier(
+            solver,
+            AdaptiveConfig(
+                parallel=True,
+                max_workers=2,
+                max_splits=1,
+                max_depth=1,
+                strategy=SplitStrategy.BISECT,
+            ),
+        )
+        box = Box({"x": Interval(Fraction(0), Fraction(1))})
+        root = Subdomain(box=box, depth=0, id=0)
+        verifier._subdomains = [root]
+        barrier = threading.Barrier(2)
+        worker_client_ids = []
+
+        def verify_leaf(expr, subdomain, upper, lower, solver=None):
+            if subdomain.depth == 0:
+                return SubdomainResult(subdomain=subdomain, verified=False)
+            worker_client_ids.append(id(solver._ensure_client()))
+            barrier.wait(timeout=2)
+            return SubdomainResult(subdomain=subdomain, verified=True)
+
+        try:
+            with patch.object(verifier, "_verify_subdomain", side_effect=verify_leaf):
+                verifier._verify_parallel(var("x"), box, 1.0, None)
+        finally:
+            source_client.close()
+
+        assert len(worker_client_ids) == 2
+        assert len(set(worker_client_ids)) == 2
+        assert id(source_client) not in worker_client_ids
 
 
 class TestParallelThreadSafety:
@@ -277,6 +315,36 @@ class TestGradientEstimator:
 
         # cos(0.5) ≈ 0.877 > 0
         assert gradients['x'] > 0
+
+    def test_split_reuses_gradient_computed_with_leaf_result(self):
+        x = var("x")
+        box = Box({"x": Interval(Fraction(0), Fraction(1))})
+        root = Subdomain(box=box, depth=0, id=0)
+        verifier = CEGARVerifier(
+            Solver(),
+            AdaptiveConfig(
+                parallel=False,
+                max_splits=1,
+                strategy=SplitStrategy.BISECT,
+                compute_gradients=True,
+            ),
+        )
+        verifier._subdomains = [root]
+        leaf = SubdomainResult(
+            subdomain=root,
+            verified=False,
+            gradient_info={"x": 1.0},
+        )
+        queue = []
+
+        with (
+            patch.object(verifier, "_verify_subdomain", return_value=leaf),
+            patch.object(GradientEstimator, "estimate_gradients") as estimate,
+        ):
+            verifier._process_subdomain(x, root, 1.0, None, queue)
+
+        estimate.assert_not_called()
+        assert len(queue) == 2
 
 
 class TestAutoSplitStrategy:

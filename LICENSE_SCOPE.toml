@@ -70,13 +70,17 @@ paths = [
   "leancert/adaptive.py",
   "leancert/client.py",
   "leancert/exceptions.py",
+  "leancert/expr.py",
   "leancert/nn.py",
   "leancert/quantifier.py",
   "leancert/result.py",
   "leancert/simplify.py",
   "leancert/solver.py",
   "leancert/tests/test_bound_outcomes.py",
+  "leancert/tests/test_adaptive_expansions.py",
   "leancert/tests/test_client_contract.py",
+  "leancert/tests/test_expr.py",
+  "leancert/validation.py",
   "pyproject.toml",
 ]
 
@@ -91,11 +95,9 @@ paths = [
   "leancert/_version.py",
   "leancert/config.py",
   "leancert/domain.py",
-  "leancert/expr.py",
   "leancert/py.typed",
   "leancert/rational.py",
   "leancert/tests/__init__.py",
-  "leancert/tests/test_adaptive_expansions.py",
   "leancert/tests/test_adaptive_verification.py",
   "leancert/tests/test_algebraic_splitting.py",
   "leancert/tests/test_api.py",
@@ -103,7 +105,6 @@ paths = [
   "leancert/tests/test_config.py",
   "leancert/tests/test_domain.py",
   "leancert/tests/test_domain_splitting.py",
-  "leancert/tests/test_expr.py",
   "leancert/tests/test_nn.py",
   "leancert/tests/test_proof_assembly.py",
   "leancert/tests/test_quantifier_synthesis.py",
@@ -111,7 +112,6 @@ paths = [
   "leancert/tests/test_result.py",
   "leancert/tests/test_simplify.py",
   "leancert/tests/test_witness.py",
-  "leancert/validation.py",
 ]
 
 [[scope]]
