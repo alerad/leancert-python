@@ -1,7 +1,7 @@
 # Third-party and separately licensed components
 
 The LeanCert Python SDK may distribute or communicate with components that are
-not covered by the SDK's provisional licensing notice.
+not covered by the SDK's evaluation license.
 
 - LeanCert Core: Apache License 2.0
 - LeanCert Bridge: Apache License 2.0

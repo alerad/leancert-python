@@ -1,0 +1,167 @@
+LeanCert Evaluation License 1.0 (Provisional)
+
+Copyright (c) 2026 Alejandro Radisic. All rights reserved.
+
+This license is a provisional source-available evaluation license. It is not
+an open-source license.
+
+1. Definitions
+
+"Licensor" means Alejandro Radisic or a successor that owns the applicable
+copyright.
+
+"Software" means original Python SDK code and other original material first
+published in the leancert-python repository after commit 716cb2d, excluding
+Earlier Material and Third-Party Material as defined below.
+
+"Community Evaluator" means a natural person acting for personal,
+educational, or non-commercial research purposes and not on behalf of a
+Commercial Organization.
+
+"Research Institution" means a nonprofit educational or nonprofit research
+institution using the Software solely for education or non-commercial
+research.
+
+"Commercial Organization" means any person or legal entity acting for a
+business, governmental, professional, or other organizational purpose that is
+not a Research Institution.
+
+"Evaluation Use" means internal, non-production testing, benchmarking,
+security review, interoperability review, and proof-of-concept assessment to
+determine whether to obtain a commercial license. Evaluation Use does not
+include ordinary commercial research, production engineering, or product
+development.
+
+"Production Use" means use of the Software or its functionality in live
+operations, in support of business operations, to provide services to another
+person, or in a product or service made available to another person.
+
+"Earlier Material" means material available at or before commit 716cb2d,
+including versions tagged `v0.3.0`, `v0.3.1`, and
+`v0.3.2-apache-final`. Earlier Material remains licensed under the Apache
+License, Version 2.0.
+
+"Third-Party Material" means any component identified as separately licensed,
+including LeanCert Core, LeanCert Bridge, and third-party dependencies.
+
+2. Evaluation Grant
+
+Subject to compliance with this license, the Licensor grants:
+
+a. each Community Evaluator and Research Institution a non-exclusive,
+   worldwide, non-transferable, non-sublicensable license to download, copy,
+   modify, and execute the Software solely for personal evaluation, education,
+   or non-commercial research; and
+
+b. each Commercial Organization a non-exclusive, worldwide,
+   non-transferable, non-sublicensable license to download, copy, modify, and
+   execute the Software solely for Evaluation Use for ninety (90) consecutive
+   days beginning when that Commercial Organization first exercises any right
+   granted by this license.
+
+Modifications may be made and shared only internally among persons covered by
+the same license grant and solely for the applicable permitted purpose. No
+right to distribute the Software or modifications outside that group is
+granted.
+
+3. Generated Results and Evidence
+
+During a permitted use, you may retain, inspect, reproduce, and publish
+results, reports, certificates, proof artifacts, and other evidence generated
+by the Software, provided that they do not contain a substantial portion of
+the Software's source code. This paragraph grants no rights in Third-Party
+Material, confidential information, personal data, or material owned by
+another person.
+
+Generated results and evidence are provided without any warranty of
+correctness, fitness, regulatory acceptance, or suitability for a particular
+purpose. Rights to use generated results in production may depend on a
+separate commercial license when their generation or continuing use involves
+Production Use of the Software.
+
+4. Uses Requiring a Commercial License
+
+Unless the Licensor separately agrees in writing, this license does not permit:
+
+a. Production Use;
+b. commercial research, production engineering, or product development other
+   than the limited Evaluation Use described above;
+c. use in, for, or on behalf of a revenue-generating product or service;
+d. providing verification, consulting, certification, or other services to a
+   third party using the Software;
+e. making the Software or its functionality available as a network service,
+   hosted service, software-as-a-service product, API, service bureau, or
+   managed service;
+f. distributing, publishing, selling, sublicensing, leasing, or transferring
+   the Software or modifications to another person; or
+g. continuing Evaluation Use by a Commercial Organization after its
+   ninety-day evaluation period expires.
+
+Commercial terms, including extensions of an evaluation period, require a
+separate written agreement with the Licensor.
+
+5. Machine-Learning Restriction
+
+You may not ingest, scrape, or use the Software's source code, documentation,
+or non-public bundled materials as training data, fine-tuning data, evaluation
+data, or a dataset source for a machine-learning or artificial-intelligence
+system.
+
+This restriction does not prohibit using documented LeanCert functionality,
+within an otherwise permitted Evaluation Use, to analyze or verify a
+machine-learning model. It also does not restrict generated results and
+evidence beyond Section 3.
+
+6. Notices and Technical Measures
+
+You must preserve copyright, license, attribution, and third-party notices in
+all copies. You may not remove or circumvent a technical measure whose purpose
+is to enforce the scope or duration of this license, except to the extent such
+a restriction is prohibited by applicable law.
+
+7. Ownership and Reserved Rights
+
+The Software is licensed, not sold. The Licensor and applicable third parties
+retain all right, title, and interest in the Software. No trademark rights are
+granted. Any right not expressly granted by this license is reserved.
+
+8. Termination
+
+Your rights under this license terminate automatically when you materially
+breach it. If the breach was unintentional, your rights are reinstated
+provisionally when you cure the breach and permanently if the Licensor does
+not notify you of the breach within sixty (60) days after the cure. Sections
+3, 7, 9, 10, and 11 survive termination to the extent applicable.
+
+9. Disclaimer of Warranty
+
+TO THE MAXIMUM EXTENT PERMITTED BY LAW, THE SOFTWARE AND GENERATED RESULTS ARE
+PROVIDED "AS IS" AND "AS AVAILABLE," WITHOUT WARRANTIES OR CONDITIONS OF ANY
+KIND, EXPRESS, IMPLIED, OR STATUTORY, INCLUDING WARRANTIES OF TITLE,
+NON-INFRINGEMENT, MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, ACCURACY,
+OR THAT THE SOFTWARE WILL BE ERROR-FREE OR SECURE.
+
+10. Limitation of Liability
+
+TO THE MAXIMUM EXTENT PERMITTED BY LAW, THE LICENSOR WILL NOT BE LIABLE FOR ANY
+DIRECT, INDIRECT, SPECIAL, INCIDENTAL, CONSEQUENTIAL, EXEMPLARY, OR PUNITIVE
+DAMAGES, OR FOR LOSS OF PROFITS, REVENUE, DATA, GOODWILL, OR BUSINESS
+OPPORTUNITY, ARISING FROM OR RELATED TO THE SOFTWARE, GENERATED RESULTS, OR
+THIS LICENSE, UNDER ANY THEORY OF LIABILITY, EVEN IF ADVISED OF THE POSSIBILITY
+OF SUCH DAMAGES.
+
+11. General
+
+If a provision of this license is unenforceable, it will be modified only to
+the minimum extent necessary, and the remaining provisions will continue in
+effect. Failure to enforce a provision is not a waiver. Nothing in this
+license limits a right that cannot lawfully be limited, including mandatory
+rights under applicable law.
+
+The Licensor may publish later versions of this license. A later version does
+not alter the terms governing a copy you already received unless you
+affirmatively choose that later version or separately agree in writing.
+
+By exercising a permission granted by this license, you indicate acceptance
+of its terms. If you do not accept them, you receive no permission under this
+license.
