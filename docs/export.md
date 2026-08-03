@@ -63,6 +63,11 @@ interval, and Taylor depth accepted by `checkSignChange`,
 required support, single-variable, and continuity witnesses, applies the
 matching Golden Theorem, and ends with `#assert_trust kernel exported_claim`.
 
+Contract 2.6 integral outcomes export the exact integrand, rational endpoints,
+relation and bound, plus the accepted partition count for numerical bounds.
+Exact polynomial equalities retain no search data; partition-search telemetry
+is intentionally excluded from proof authority.
+
 ## Verify exported projects
 
 Every new export contains an `artifact.json` manifest using schema

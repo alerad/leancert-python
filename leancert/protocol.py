@@ -376,9 +376,29 @@ class BridgeHandshake:
             if outcome.certificate.verification_route not in capability.verification_routes:
                 raise ProtocolViolation("scalar-root verification route was not advertised")
             if outcome.certificate.schema_version not in self.certificate_schemas:
-                raise ProtocolViolation(
-                    "scalar-root certificate schema is absent from handshake"
-                )
+                raise ProtocolViolation("scalar-root certificate schema is absent from handshake")
+        return outcome
+
+    def parse_integral_outcome(
+        self, value: Any, *, expected_relation: str
+    ) -> IntegralOperationOutcome:
+        capability = self.capability("check_integral")
+        if capability is None:
+            raise ProtocolViolation(
+                "bridge returned an integral outcome without check_integral capability"
+            )
+        outcome = IntegralOperationOutcome.parse(value, expected_relation=expected_relation)
+        if outcome.status not in capability.outcomes:
+            raise ProtocolViolation("integral status was not advertised")
+        if outcome.backend not in capability.backends:
+            raise ProtocolViolation("integral backend was not advertised")
+        if outcome.certificate is not None:
+            if outcome.certificate.schema_version not in capability.certificate_schemas:
+                raise ProtocolViolation("integral certificate schema was not advertised")
+            if outcome.certificate.verification_route not in capability.verification_routes:
+                raise ProtocolViolation("integral verification route was not advertised")
+            if outcome.certificate.schema_version not in self.certificate_schemas:
+                raise ProtocolViolation("integral certificate schema is absent from handshake")
         return outcome
 
     @classmethod
@@ -1205,6 +1225,263 @@ class ScalarRootOperationOutcome:
                 raise ProtocolViolation("scalar-root certificate contradicts the outcome")
         assert claim is not None and backend is not None
         return cls(status, claim, backend, interval, certificate, MappingProxyType(dict(obj)))
+
+
+INTEGRAL_AUTHORITIES = {
+    "eq": (
+        "LeanCert.Engine.QPoly.checkExactIntegral",
+        "LeanCert.Engine.QPoly.integral_eq_of_check",
+    ),
+    "lower": (
+        "LeanCert.Validity.Integration.checkIntegralPartitionLowerBound",
+        "LeanCert.Validity.Integration.integral_partition_lower_of_check",
+    ),
+    "upper": (
+        "LeanCert.Validity.Integration.checkIntegralPartitionUpperBound",
+        "LeanCert.Validity.Integration.integral_partition_upper_of_check",
+    ),
+}
+
+
+@dataclass(frozen=True, slots=True)
+class ReplayIntegralPayload:
+    expression: Mapping[str, Any]
+    interval: WireEnclosure
+    relation: str
+    bound: WireRational
+    partitions: int | None
+    canonical: Mapping[str, Any]
+
+    @classmethod
+    def parse(cls, value: Any) -> ReplayIntegralPayload:
+        obj = _object(value, "integral certificate payload")
+        if set(obj) != {
+            "schema_version",
+            "expression",
+            "interval",
+            "relation",
+            "bound",
+            "partitions",
+        }:
+            raise ProtocolViolation("integral payload fields are not canonical")
+        if obj["schema_version"] != "checked-integral/1":
+            raise ProtocolViolation("integral replay payload schema is unsupported")
+        expression = _freeze_json(_object(obj["expression"], "integral expression"))
+        interval = WireEnclosure.parse(obj["interval"], "integral interval")
+        relation = _string(obj["relation"], "integral relation")
+        if relation not in INTEGRAL_AUTHORITIES:
+            raise ProtocolViolation("integral relation is unknown")
+        bound = _canonical_wire_rational(obj["bound"], "integral bound")
+        partitions = obj["partitions"]
+        if relation == "eq":
+            if partitions is not None:
+                raise ProtocolViolation("exact integral certificates cannot retain partitions")
+        elif isinstance(partitions, bool) or not isinstance(partitions, int) or partitions <= 0:
+            raise ProtocolViolation("bounded integral certificates require positive partitions")
+        canonical = _freeze_json(dict(obj))
+        assert relation is not None
+        return cls(expression, interval, relation, bound, partitions, canonical)
+
+    @property
+    def digest(self) -> str:
+        encoded = json.dumps(
+            _plain_json(self.canonical), sort_keys=True, separators=(",", ":")
+        ).encode()
+        return "sha256:" + hashlib.sha256(encoded).hexdigest()
+
+
+@dataclass(frozen=True, slots=True)
+class IntegralCertificateDescriptor:
+    schema_version: str
+    checker: str
+    verifier: str
+    verification_route: str
+    payload: ReplayIntegralPayload
+
+    @classmethod
+    def parse(cls, value: Any) -> IntegralCertificateDescriptor:
+        obj = _object(value, "integral certificate")
+        if set(obj) != {
+            "schema_version",
+            "checker",
+            "verifier",
+            "verification_route",
+            "payload",
+        }:
+            raise ProtocolViolation("integral certificate fields are not canonical")
+        if obj["schema_version"] != "integral-check/1":
+            raise ProtocolViolation("integral certificate schema is unsupported")
+        payload = ReplayIntegralPayload.parse(obj["payload"])
+        checker, verifier = INTEGRAL_AUTHORITIES[payload.relation]
+        if obj["checker"] != checker or obj["verifier"] != verifier:
+            raise ProtocolViolation("integral certificate authority is not recognized")
+        if obj["verification_route"] != "compiled_checker":
+            raise ProtocolViolation("integral verification route is unsupported")
+        return cls(obj["schema_version"], checker, verifier, obj["verification_route"], payload)
+
+
+@dataclass(frozen=True, slots=True)
+class IntegralSearchOutcome:
+    source: str
+    start_partitions: int | None
+    max_partitions: int | None
+    chosen_partitions: int | None
+    attempts: int
+    failure: Mapping[str, Any] | None
+
+    @classmethod
+    def parse(cls, value: Any) -> IntegralSearchOutcome:
+        obj = _object(value, "integral search")
+        if set(obj) != {
+            "source",
+            "start_partitions",
+            "max_partitions",
+            "chosen_partitions",
+            "attempts",
+            "failure",
+        }:
+            raise ProtocolViolation("integral search fields are not canonical")
+        source = _string(obj["source"], "integral search source")
+        if source not in {"exact", "automatic"}:
+            raise ProtocolViolation("integral search source is unknown")
+        start, maximum, chosen, attempts = (
+            obj["start_partitions"],
+            obj["max_partitions"],
+            obj["chosen_partitions"],
+            obj["attempts"],
+        )
+        if source == "exact":
+            if start is not None or maximum is not None or chosen is not None or attempts != 0:
+                raise ProtocolViolation("exact integral search metadata is contradictory")
+        else:
+            if (
+                any(
+                    isinstance(item, bool) or not isinstance(item, int) or item <= 0
+                    for item in (start, maximum)
+                )
+                or start > maximum
+            ):
+                raise ProtocolViolation("integral partition limits are invalid")
+            if chosen is not None and (
+                isinstance(chosen, bool) or not isinstance(chosen, int) or chosen <= 0
+            ):
+                raise ProtocolViolation("chosen integral partitions must be positive")
+            if isinstance(attempts, bool) or not isinstance(attempts, int) or attempts < 0:
+                raise ProtocolViolation("integral search attempts must be natural")
+        failure = obj["failure"]
+        if failure is not None:
+            failure = _freeze_json(_object(failure, "integral failure"))
+        assert source is not None
+        return cls(source, start, maximum, chosen, attempts, failure)
+
+
+@dataclass(frozen=True, slots=True)
+class IntegralOperationOutcome:
+    status: OutcomeStatus
+    relation: str
+    route: str
+    backend: str
+    interval: WireEnclosure
+    bound: WireRational
+    enclosure: WireEnclosure | None
+    search: IntegralSearchOutcome
+    certificate: IntegralCertificateDescriptor | None
+    raw: Mapping[str, Any]
+
+    @classmethod
+    def parse(cls, value: Any, *, expected_relation: str) -> IntegralOperationOutcome:
+        obj = _object(value, "check_integral result")
+        if set(obj) != {
+            "verified",
+            "status",
+            "relation",
+            "route",
+            "backend",
+            "interval",
+            "bound",
+            "enclosure",
+            "search",
+            "certificate",
+        }:
+            raise ProtocolViolation("integral outcome fields are not canonical")
+        if not isinstance(obj["verified"], bool):
+            raise ProtocolViolation("integral verified flag must be boolean")
+        try:
+            status = OutcomeStatus(obj["status"])
+        except (TypeError, ValueError) as exc:
+            raise ProtocolViolation("integral status is unknown") from exc
+        if status not in {
+            OutcomeStatus.VERIFIED,
+            OutcomeStatus.CANDIDATE_REJECTED,
+            OutcomeStatus.INCONCLUSIVE,
+            OutcomeStatus.UNSUPPORTED,
+            OutcomeStatus.DOMAIN_OBSTRUCTION,
+        }:
+            raise ProtocolViolation("integral status is invalid for this operation")
+        if obj["verified"] != (status is OutcomeStatus.VERIFIED):
+            raise ProtocolViolation("integral verified flag contradicts status")
+        relation = _string(obj["relation"], "integral relation")
+        if relation != expected_relation or relation not in INTEGRAL_AUTHORITIES:
+            raise ProtocolViolation("integral relation contradicts the request")
+        route = _string(obj["route"], "integral route")
+        expected_route = "exact_polynomial" if relation == "eq" else "checked_partitions"
+        if route != expected_route:
+            raise ProtocolViolation("integral route contradicts its relation")
+        backend = _string(obj["backend"], "integral backend")
+        expected_backend = (
+            "rational_exact_polynomial" if relation == "eq" else "rational_checked_partitions"
+        )
+        if backend != expected_backend:
+            raise ProtocolViolation("integral backend contradicts its relation")
+        interval = WireEnclosure.parse(obj["interval"], "integral interval")
+        bound = _canonical_wire_rational(obj["bound"], "integral bound")
+        enclosure = (
+            None
+            if obj["enclosure"] is None
+            else WireEnclosure.parse(obj["enclosure"], "integral enclosure")
+        )
+        search = IntegralSearchOutcome.parse(obj["search"])
+        certificate = (
+            None
+            if obj["certificate"] is None
+            else IntegralCertificateDescriptor.parse(obj["certificate"])
+        )
+        if (status is OutcomeStatus.VERIFIED) != (certificate is not None):
+            raise ProtocolViolation("only verified integral outcomes may retain a certificate")
+        if status is OutcomeStatus.VERIFIED and enclosure is None:
+            raise ProtocolViolation("verified integral outcomes require an enclosure")
+        if relation == "eq" and status is OutcomeStatus.VERIFIED:
+            assert enclosure is not None
+            if enclosure.lower != bound or enclosure.upper != bound:
+                raise ProtocolViolation("exact integral enclosure contradicts its bound")
+        if relation == "eq" and search.source != "exact":
+            raise ProtocolViolation("exact integral outcomes require exact search metadata")
+        if relation != "eq" and search.source != "automatic":
+            raise ProtocolViolation("bounded integral outcomes require partition search metadata")
+        if certificate is not None:
+            payload = certificate.payload
+            if (
+                payload.relation != relation
+                or payload.interval != interval
+                or payload.bound != bound
+                or payload.expression is None
+            ):
+                raise ProtocolViolation("integral certificate contradicts the outcome")
+            if relation != "eq" and payload.partitions != search.chosen_partitions:
+                raise ProtocolViolation("integral certificate partitions contradict the search")
+        assert relation is not None and route is not None and backend is not None
+        return cls(
+            status,
+            relation,
+            route,
+            backend,
+            interval,
+            bound,
+            enclosure,
+            search,
+            certificate,
+            MappingProxyType(dict(obj)),
+        )
 
 
 @dataclass(frozen=True, slots=True)

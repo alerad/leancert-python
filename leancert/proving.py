@@ -16,6 +16,11 @@ from .operations.eventual import (
     try_plan_eventual_claim,
     unsupported_eventual,
 )
+from .operations.integrals import (
+    contains_integral,
+    execute_integral_plan,
+    try_plan_integral_claim,
+)
 from .operations.scalar_roots import execute_scalar_root_claim
 from .operations.system_roots import (
     SystemRootPlan,
@@ -29,6 +34,8 @@ from .result import (
     Verified,
     VerifiedConjunction,
     VerifiedEventualBound,
+    VerifiedIntegralBound,
+    VerifiedIntegralEquality,
     VerifiedRootExclusion,
     VerifiedRootExistence,
     VerifiedSystemRoot,
@@ -152,6 +159,24 @@ class RefutationConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class IntegralConfig:
+    """Effort controls for untrusted uniform-partition discovery."""
+
+    start_partitions: int = 32
+    max_partitions: int = 4096
+
+    def __post_init__(self) -> None:
+        for name, value in (
+            ("start_partitions", self.start_partitions),
+            ("max_partitions", self.max_partitions),
+        ):
+            if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+                raise ValueError(f"{name} must be a positive integer")
+        if self.max_partitions < self.start_partitions:
+            raise ValueError("max_partitions must be at least start_partitions")
+
+
+@dataclass(frozen=True, slots=True)
 class ProveConfig:
     """Effort controls for checked claim execution.
 
@@ -163,6 +188,7 @@ class ProveConfig:
     taylor_depth: int = 10
     system_root: SystemRootConfig = field(default_factory=SystemRootConfig)
     eventual: EventualConfig = field(default_factory=EventualConfig)
+    integral: IntegralConfig = field(default_factory=IntegralConfig)
     refutation: RefutationConfig = field(default_factory=RefutationConfig)
 
     def __post_init__(self) -> None:
@@ -176,6 +202,8 @@ class ProveConfig:
             raise TypeError("system_root must be a SystemRootConfig")
         if not isinstance(self.eventual, EventualConfig):
             raise TypeError("eventual must be an EventualConfig")
+        if not isinstance(self.integral, IntegralConfig):
+            raise TypeError("integral must be an IntegralConfig")
         if not isinstance(self.refutation, RefutationConfig):
             raise TypeError("refutation must be a RefutationConfig")
 
@@ -292,6 +320,8 @@ def _established(result: ProofResult) -> bool:
             Verified,
             VerifiedSystemRoot,
             VerifiedEventualBound,
+            VerifiedIntegralBound,
+            VerifiedIntegralEquality,
             VerifiedRootExistence,
             VerifiedUniqueRoot,
             VerifiedRootExclusion,
@@ -353,6 +383,20 @@ def _prove_normalized(
             client=client,
             max_checks=config.eventual.max_checks,
         )
+    if contains_integral(normalized_claim):
+        integral_plan, integral_reason = try_plan_integral_claim(normalized_claim)
+        if integral_plan is None:
+            assert integral_reason is not None
+            return unsupported_result(original_claim, normalized_claim, claim_id, integral_reason)
+        return execute_integral_plan(
+            integral_plan,
+            original_claim=original_claim,
+            normalized_claim=normalized_claim,
+            claim_id=claim_id,
+            client=client,
+            start_partitions=config.integral.start_partitions,
+            max_partitions=config.integral.max_partitions,
+        )
     plan, unsupported_reason = try_plan_bound_claim(normalized_claim)
     if plan is not None:
         return execute_bound_plan(
@@ -385,6 +429,7 @@ def _prove_normalized(
 
 __all__ = [
     "EventualConfig",
+    "IntegralConfig",
     "KrawczykCandidate",
     "ProveConfig",
     "RefutationConfig",
