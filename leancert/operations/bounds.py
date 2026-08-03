@@ -9,27 +9,34 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from fractions import Fraction
+from itertools import product
 from typing import Any
 
 from .. import ast
 from ..client import _parse_rat
 from ..domain import Interval as ResultInterval
 from ..exceptions import ProtocolViolation
+from ..expression_codec import (
+    UnsupportedSemanticExpression,
+    compile_semantic_expression,
+    lower_bridge_expression,
+)
 from ..result import (
     BoundCheckEvidence,
+    BoundComparisonLowering,
     BridgeProvenance,
+    CheckedCounterexample,
     DomainObstruction,
     Inconclusive,
     ProofResult,
+    Rejected,
     ReplayableBoundCertificate,
     ReplayBoundConfig,
     Unsupported,
     Verified,
 )
 
-
-class _UnsupportedBound(ValueError):
-    pass
+_UnsupportedBound = UnsupportedSemanticExpression
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,6 +45,7 @@ class BoundPlan:
     axes: tuple[ast.AxisDomain, ...]
     lower: Fraction | None
     upper: Fraction | None
+    lowerings: tuple[BoundComparisonLowering, ...]
 
     @property
     def domain(self) -> ast.Box | None:
@@ -53,20 +61,55 @@ def _rational(expression: ast.Expr, role: str) -> Fraction:
 
 def _comparison_bound(
     claim: ast.ComparisonClaim,
-) -> tuple[ast.Expr, str, Fraction]:
+) -> tuple[ast.Expr, str, Fraction, BoundComparisonLowering]:
     if claim.relation is not ast.Relation.LE:
         if claim.relation is ast.Relation.LT:
-            raise _UnsupportedBound(
-                "strict inequalities are not supported by check_bound/1"
-            )
+            raise _UnsupportedBound("strict inequalities are not supported by check_bound/1")
         raise _UnsupportedBound(
             f"comparison relation {claim.relation.value!r} is not a checked bound"
         )
     if isinstance(claim.rhs, ast.RationalConstant):
-        return claim.lhs, "upper", claim.rhs.value
+        return (
+            claim.lhs,
+            "upper",
+            claim.rhs.value,
+            BoundComparisonLowering(
+                claim.lhs,
+                claim.rhs,
+                claim.lhs,
+                "upper",
+                claim.rhs.value,
+                "lhs_le_constant",
+            ),
+        )
     if isinstance(claim.lhs, ast.RationalConstant):
-        return claim.rhs, "lower", claim.lhs.value
-    raise _UnsupportedBound("one side of each checked bound must be an exact rational constant")
+        return (
+            claim.rhs,
+            "lower",
+            claim.lhs.value,
+            BoundComparisonLowering(
+                claim.lhs,
+                claim.rhs,
+                claim.rhs,
+                "lower",
+                claim.lhs.value,
+                "constant_le_rhs",
+            ),
+        )
+    difference = ast.normalize(claim.lhs - claim.rhs)
+    return (
+        difference,
+        "upper",
+        Fraction(0),
+        BoundComparisonLowering(
+            claim.lhs,
+            claim.rhs,
+            difference,
+            "upper",
+            Fraction(0),
+            "subtract_rhs_le_zero",
+        ),
+    )
 
 
 def plan_bound_claim(claim: ast.Claim) -> BoundPlan:
@@ -95,9 +138,10 @@ def plan_bound_claim(claim: ast.Claim) -> BoundPlan:
     expression: ast.Expr | None = None
     lower: Fraction | None = None
     upper: Fraction | None = None
+    lowerings: list[BoundComparisonLowering] = []
     for item in claims:
         assert isinstance(item, ast.ComparisonClaim)
-        candidate, direction, bound = _comparison_bound(item)
+        candidate, direction, bound, lowering = _comparison_bound(item)
         candidate = ast.normalize(candidate)
         if expression is None:
             expression = candidate
@@ -113,20 +157,14 @@ def plan_bound_claim(claim: ast.Claim) -> BoundPlan:
             if upper is not None:
                 raise _UnsupportedBound("a claim may contain at most one upper bound")
             upper = bound
+        lowerings.append(lowering)
 
     assert expression is not None
-    return BoundPlan(expression, tuple(axes), lower, upper)
+    return BoundPlan(expression, tuple(axes), lower, upper, tuple(lowerings))
 
 
 def _rat(value: Fraction) -> dict[str, int]:
     return {"n": value.numerator, "d": value.denominator}
-
-
-def _fold(kind: str, values: tuple[ast.Expr, ...], compile_one) -> dict[str, Any]:
-    compiled = compile_one(values[0])
-    for value in values[1:]:
-        compiled = {"kind": kind, "e1": compiled, "e2": compile_one(value)}
-    return compiled
 
 
 def _compile_expression(
@@ -134,62 +172,7 @@ def _compile_expression(
     indices: dict[ast.SymbolId, int],
     advertised_nodes: frozenset[str],
 ) -> dict[str, Any]:
-    def compile_one(node: ast.Expr) -> dict[str, Any]:
-        if isinstance(node, ast.RationalConstant):
-            result = {"kind": "const", "val": _rat(node.value)}
-        elif isinstance(node, ast.Variable):
-            try:
-                index = indices[node.symbol.identifier]
-            except KeyError as exc:
-                raise _UnsupportedBound(
-                    f"expression variable {node.name!r} is not bound by the claim domain"
-                ) from exc
-            result = {"kind": "var", "idx": index}
-        elif isinstance(node, ast.Cast):
-            return compile_one(node.expression)
-        elif isinstance(node, ast.Neg):
-            result = {"kind": "neg", "e": compile_one(node.expression)}
-        elif isinstance(node, ast.Add):
-            result = _fold("add", node.terms, compile_one)
-        elif isinstance(node, ast.Mul):
-            result = _fold("mul", node.factors, compile_one)
-        elif isinstance(node, ast.Div):
-            result = {
-                "kind": "div",
-                "e1": compile_one(node.numerator),
-                "e2": compile_one(node.denominator),
-            }
-        elif isinstance(node, ast.Pow):
-            exponent = node.exponent.value
-            if exponent.denominator != 1 or exponent < 0:
-                raise _UnsupportedBound(
-                    "the checked bridge expression schema requires a non-negative integer power"
-                )
-            result = {"kind": "pow", "base": compile_one(node.base), "exp": int(exponent)}
-        elif isinstance(node, ast.FunctionCall):
-            if not isinstance(node.function, ast.BuiltinFunctionRef):
-                raise _UnsupportedBound(
-                    "external functions require a negotiated extension capability"
-                )
-            name = node.function.name
-            arguments = tuple(compile_one(value) for value in node.arguments)
-            if len(arguments) == 1:
-                result = {"kind": name, "e": arguments[0]}
-            elif len(arguments) == 2 and name in {"min", "max"}:
-                result = {"kind": name, "e1": arguments[0], "e2": arguments[1]}
-            else:
-                raise _UnsupportedBound(f"builtin function {name!r} has no bridge encoding")
-        else:
-            raise _UnsupportedBound(
-                f"expression node {type(node).__name__} is not supported by check_bound/1"
-            )
-        if result["kind"] not in advertised_nodes:
-            raise _UnsupportedBound(
-                f"bridge did not advertise expression node {result['kind']!r}"
-            )
-        return result
-
-    return compile_one(expression)
+    return compile_semantic_expression(expression, indices, advertised_nodes)
 
 
 def bridge_provenance(client: Any) -> BridgeProvenance:
@@ -221,52 +204,7 @@ def bridge_provenance(client: Any) -> BridgeProvenance:
 
 def _lower_checked_expression(expression: dict[str, Any]) -> dict[str, Any]:
     """Mirror bridge request decoding into the canonical LeanCert core AST."""
-    kind = expression["kind"]
-    if kind in {"const", "var"}:
-        return dict(expression)
-    if kind in {"add", "mul"}:
-        return {
-            "kind": kind,
-            "e1": _lower_checked_expression(expression["e1"]),
-            "e2": _lower_checked_expression(expression["e2"]),
-        }
-    if kind == "sub":
-        return {
-            "kind": "add",
-            "e1": _lower_checked_expression(expression["e1"]),
-            "e2": {"kind": "neg", "e": _lower_checked_expression(expression["e2"])},
-        }
-    if kind == "div":
-        return {
-            "kind": "mul",
-            "e1": _lower_checked_expression(expression["e1"]),
-            "e2": {"kind": "inv", "e": _lower_checked_expression(expression["e2"])},
-        }
-    if kind == "pow":
-        base = _lower_checked_expression(expression["base"])
-
-        def power(exponent: int) -> dict[str, Any]:
-            if exponent == 0:
-                return {"kind": "const", "val": {"n": 1, "d": 1}}
-            return {"kind": "mul", "e1": base, "e2": power(exponent - 1)}
-
-        return power(expression["exp"])
-    if kind in {
-        "neg", "inv", "exp", "sin", "cos", "log", "atan", "arsinh",
-        "atanh", "sinc", "erf", "sinh", "cosh", "tanh",
-    }:
-        return {"kind": kind, "e": _lower_checked_expression(expression["e"])}
-    if kind == "sqrt":
-        argument = _lower_checked_expression(expression["e"])
-        return {
-            "kind": "exp",
-            "e": {
-                "kind": "mul",
-                "e1": {"kind": "log", "e": argument},
-                "e2": {"kind": "inv", "e": {"kind": "const", "val": {"n": 2, "d": 1}}},
-            },
-        }
-    raise _UnsupportedBound(f"cannot validate replay lowering for expression kind {kind!r}")
+    return lower_bridge_expression(expression)
 
 
 def _replay_certificate(
@@ -304,9 +242,7 @@ def _replay_certificate(
         verification_route=descriptor.verification_route,
         payload_digest=payload.digest,
         expression=payload.expression,
-        box=tuple(
-            ResultInterval(item.lower.fraction, item.upper.fraction) for item in payload.box
-        ),
+        box=tuple(ResultInterval(item.lower.fraction, item.upper.fraction) for item in payload.box),
         bound=payload.bound.fraction,
         direction=payload.direction,
         config=ReplayBoundConfig(
@@ -333,6 +269,7 @@ def unsupported_result(
         domain=None if plan is None else plan.domain,
         lower=None if plan is None else plan.lower,
         upper=None if plan is None else plan.upper,
+        lowerings=() if plan is None else plan.lowerings,
         checks=(),
         provenance=provenance or BridgeProvenance(),
         original_claim=original_claim,
@@ -350,6 +287,7 @@ def execute_bound_plan(
     claim_id: ast.ClaimDigest,
     client: Any,
     taylor_depth: int,
+    refutation_config: Any | None = None,
 ) -> ProofResult:
     contract = client.bridge_contract
     provenance = bridge_provenance(client)
@@ -379,9 +317,7 @@ def execute_bound_plan(
 
     indices = {axis.variable.symbol.identifier: index for index, axis in enumerate(plan.axes)}
     try:
-        expression_json = _compile_expression(
-            plan.expression, indices, contract.expression_nodes
-        )
+        expression_json = _compile_expression(plan.expression, indices, contract.expression_nodes)
     except _UnsupportedBound as exc:
         return unsupported_result(
             original_claim,
@@ -393,8 +329,10 @@ def execute_bound_plan(
         )
 
     box_json = [
-        {"lo": _rat(_rational(axis.interval.lower, "domain lower endpoint")),
-         "hi": _rat(_rational(axis.interval.upper, "domain upper endpoint"))}
+        {
+            "lo": _rat(_rational(axis.interval.lower, "domain lower endpoint")),
+            "hi": _rat(_rational(axis.interval.upper, "domain upper endpoint")),
+        }
         for axis in plan.axes
     ]
     checks: list[BoundCheckEvidence] = []
@@ -447,6 +385,7 @@ def execute_bound_plan(
         upper=plan.upper,
         checks=tuple(checks),
         provenance=provenance,
+        lowerings=plan.lowerings,
         original_claim=original_claim,
         normalized_claim=normalized_claim,
         claim_id=claim_id,
@@ -463,10 +402,129 @@ def execute_bound_plan(
             **common,
             reason="The bridge rejected this expression as unsupported by check_bound/1.",
         )
+    if refutation_config is not None and refutation_config.enabled:
+        rejected = _search_checked_refutation(
+            plan,
+            expression_json=expression_json,
+            client=client,
+            contract=contract,
+            taylor_depth=taylor_depth,
+            max_candidates=refutation_config.max_candidates,
+        )
+        if rejected is not None:
+            counterexample, refutation_check = rejected
+            return Rejected(
+                **common,
+                counterexample=counterexample,
+                refutation_check=refutation_check,
+            )
     return Inconclusive(
         **common,
         reason="The checked enclosure was insufficient for the normalized claim.",
     )
+
+
+def _search_checked_refutation(
+    plan: BoundPlan,
+    *,
+    expression_json: dict[str, Any],
+    client: Any,
+    contract: Any,
+    taylor_depth: int,
+    max_candidates: int,
+) -> tuple[CheckedCounterexample, BoundCheckEvidence] | None:
+    """Search exact grid points; accept only an opposite checked bound."""
+
+    coordinates: list[tuple[Fraction, ...]] = []
+    for axis in plan.axes:
+        lower = _rational(axis.interval.lower, "domain lower endpoint")
+        upper = _rational(axis.interval.upper, "domain upper endpoint")
+        midpoint = (lower + upper) / 2
+        coordinates.append(tuple(dict.fromkeys((midpoint, lower, upper))))
+    candidates = product(*coordinates) if coordinates else ((),)
+
+    for candidate_index, point in enumerate(candidates):
+        if candidate_index >= max_candidates:
+            break
+        point_box = [{"lo": _rat(value), "hi": _rat(value)} for value in point]
+        for original_direction, original_bound in (
+            ("lower", plan.lower),
+            ("upper", plan.upper),
+        ):
+            if original_bound is None:
+                continue
+            probe = client.check_bound(
+                expression_json,
+                point_box,
+                _rat(original_bound),
+                is_upper_bound=original_direction == "upper",
+                taylor_depth=taylor_depth,
+            )
+            enclosure_json = probe.get("enclosure") or {
+                "lo": probe["computed_lo"],
+                "hi": probe["computed_hi"],
+            }
+            enclosure = ResultInterval(
+                _parse_rat(enclosure_json["lo"]),
+                _parse_rat(enclosure_json["hi"]),
+            )
+            if original_direction == "upper" and enclosure.lo > original_bound:
+                opposite_direction = "lower"
+                opposite_bound = (original_bound + enclosure.lo) / 2
+            elif original_direction == "lower" and enclosure.hi < original_bound:
+                opposite_direction = "upper"
+                opposite_bound = (original_bound + enclosure.hi) / 2
+            else:
+                continue
+
+            checked = client.check_bound(
+                expression_json,
+                point_box,
+                _rat(opposite_bound),
+                is_upper_bound=opposite_direction == "upper",
+                taylor_depth=taylor_depth,
+            )
+            checked_status = checked.get(
+                "status", "verified" if checked.get("verified") else "inconclusive"
+            )
+            if checked_status != "verified":
+                continue
+            checked_enclosure_json = checked.get("enclosure") or {
+                "lo": checked["computed_lo"],
+                "hi": checked["computed_hi"],
+            }
+            checked_enclosure = ResultInterval(
+                _parse_rat(checked_enclosure_json["lo"]),
+                _parse_rat(checked_enclosure_json["hi"]),
+            )
+            replay = _replay_certificate(
+                checked,
+                contract=contract,
+                expression_json=expression_json,
+                box_json=point_box,
+                bound=opposite_bound,
+                direction=opposite_direction,
+                taylor_depth=taylor_depth,
+            )
+            evidence = BoundCheckEvidence(
+                direction=opposite_direction,
+                requested_bound=opposite_bound,
+                enclosure=checked_enclosure,
+                status="verified",
+                operation="check_bound_refutation",
+                backend=checked.get("backend"),
+                taylor_depth=taylor_depth,
+                certificate=checked.get("certificate"),
+                replay_certificate=replay,
+                raw_response=dict(checked),
+            )
+            values = {
+                f"{axis.variable.symbol.identifier.namespace}:"
+                f"{axis.variable.symbol.identifier.name}": value
+                for axis, value in zip(plan.axes, point, strict=True)
+            }
+            return CheckedCounterexample(values, enclosure), evidence
+    return None
 
 
 def try_plan_bound_claim(claim: ast.Claim) -> tuple[BoundPlan | None, str | None]:

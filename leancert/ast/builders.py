@@ -18,6 +18,7 @@ from .symbols import Symbol, SymbolId
 pi = NamedConstant(NamedConstantKind.PI, REAL)
 e = NamedConstant(NamedConstantKind.E, REAL)
 log_two = NamedConstant(NamedConstantKind.LOG_TWO, REAL)
+euler_mascheroni = NamedConstant(NamedConstantKind.EULER_MASCHERONI, REAL)
 
 
 def var(name: str, sort: Sort = REAL, namespace: str = "default") -> Variable:

@@ -21,6 +21,7 @@ from .builders import (
     e,
     eq,
     erf,
+    euler_mascheroni,
     eventually,
     exp,
     external_function,

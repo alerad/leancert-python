@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from . import ast
+from .expression_codec import compile_semantic_expression, lower_bridge_expression
 from .result import (
     ExportDependencyUnavailable,
     ExportPrepared,
@@ -21,10 +22,12 @@ from .result import (
     ExportVerificationMismatch,
     ExportVerified,
     LeanProjectArtifact,
+    NormalizedTrue,
     ReplayableBoundCertificate,
     ReplayableEventualCertificate,
     ReplayableKrawczykCertificate,
     Verified,
+    VerifiedConjunction,
     VerifiedEventualBound,
     VerifiedSystemRoot,
 )
@@ -87,10 +90,12 @@ def _interval(value: Any) -> str:
     return "{ lo := " + _rat(value.lo) + ", hi := " + _rat(value.hi) + ", le := by norm_num }"
 
 
-def _render_project(certificates: tuple[ReplayableBoundCertificate, ...]) -> str:
-    expression = _core_expression(certificates[0].expression)
-    support = _support_proof(certificates[0].expression)
-    domain = ",\n  ".join(_interval(item) for item in certificates[0].box)
+def _render_project(
+    certificates: tuple[ReplayableBoundCertificate, ...],
+    lowerings: tuple[dict[str, Any], ...],
+    *,
+    equality_claim: bool = False,
+) -> str:
     lines = [
         "import LeanCert.Validity.Bounds",
         "import LeanCert.Tactic.Verification",
@@ -99,18 +104,11 @@ def _render_project(certificates: tuple[ReplayableBoundCertificate, ...]) -> str
         "",
         "namespace LeanCertExport",
         "",
-        f"def expression : Expr := {expression}",
-        "",
-        "def domain : Box := [",
-        f"  {domain}",
-        "]",
-        "",
-        "theorem expression_supported : ADSupported expression := by",
-        "  unfold expression",
-        f"  exact {support}",
-        "",
     ]
-    for index, certificate in enumerate(certificates):
+    for index, (certificate, lowering) in enumerate(zip(certificates, lowerings, strict=True)):
+        expression = _core_expression(certificate.expression)
+        support = _support_proof(certificate.expression)
+        domain = ",\n  ".join(_interval(item) for item in certificate.box)
         cfg = certificate.config
         expected_checker = (
             "LeanCert.Validity.GlobalOpt.checkGlobalUpperBound"
@@ -126,6 +124,19 @@ def _render_project(certificates: tuple[ReplayableBoundCertificate, ...]) -> str
             raise ValueError("certificate checker or verifier is not the supported bound authority")
         lines.extend(
             [
+                f"def expression_{index} : Expr := {expression}",
+                "",
+                f"def semantic_lhs_{index} : Expr := {_core_expression(lowering['lhs'])}",
+                f"def semantic_rhs_{index} : Expr := {_core_expression(lowering['rhs'])}",
+                "",
+                f"def domain_{index} : Box := [",
+                f"  {domain}",
+                "]",
+                "",
+                f"theorem expression_supported_{index} : ADSupported expression_{index} := by",
+                f"  unfold expression_{index}",
+                f"  exact {support}",
+                "",
                 f"def config_{index} : GlobalOptConfig := {{",
                 f"  maxIterations := {cfg.max_iterations}",
                 f"  tolerance := {_rat(cfg.tolerance)}",
@@ -134,28 +145,163 @@ def _render_project(certificates: tuple[ReplayableBoundCertificate, ...]) -> str
                 "}",
                 "",
                 f"theorem certificate_{index} :",
-                f"    {expected_checker} expression domain {_rat(certificate.bound)} "
+                f"    {expected_checker} expression_{index} domain_{index} {_rat(certificate.bound)} "
                 f"config_{index} = true := by",
                 "  decide +kernel",
                 "",
                 f"theorem exported_claim_{index} :",
-                "    ∀ (ρ : Nat → ℝ), Box.envMem ρ domain →",
-                "      (∀ i, i ≥ domain.length → ρ i = 0) →",
+                f"    ∀ (ρ : Nat → ℝ), Box.envMem ρ domain_{index} →",
+                f"      (∀ i, i ≥ domain_{index}.length → ρ i = 0) →",
                 (
-                    f"      Expr.eval ρ expression ≤ (({_rat(certificate.bound)}) : ℝ) :="
+                    f"      Expr.eval ρ expression_{index} ≤ (({_rat(certificate.bound)}) : ℝ) :="
                     if certificate.direction == "upper"
-                    else f"      (({_rat(certificate.bound)}) : ℝ) ≤ Expr.eval ρ expression :="
+                    else f"      (({_rat(certificate.bound)}) : ℝ) ≤ Expr.eval ρ expression_{index} :="
                 ),
                 f"  {expected_verifier}",
-                f"    expression expression_supported domain {_rat(certificate.bound)} "
+                f"    expression_{index} expression_supported_{index} domain_{index} {_rat(certificate.bound)} "
                 f"config_{index} certificate_{index}",
                 "",
                 f"#assert_trust kernel exported_claim_{index}",
+                "",
+                f"theorem semantic_claim_{index} :",
+                f"    ∀ (ρ : Nat → ℝ), Box.envMem ρ domain_{index} →",
+                f"      (∀ i, i ≥ domain_{index}.length → ρ i = 0) →",
+                f"      Expr.eval ρ semantic_lhs_{index} ≤ Expr.eval ρ semantic_rhs_{index} := by",
+                "  intro ρ hρ htail",
+                f"  have h := exported_claim_{index} ρ hρ htail",
+                f"  simp [expression_{index}, semantic_lhs_{index}, semantic_rhs_{index}, Expr.eval] at h ⊢",
+                "  linarith",
+                "",
+                f"#assert_trust kernel semantic_claim_{index}",
+                "",
+            ]
+        )
+    shared_domain = len(certificates) > 1 and all(
+        certificate.box == certificates[0].box for certificate in certificates
+    )
+    if equality_claim:
+        if not shared_domain or len(certificates) != 2:
+            raise ValueError("equality export requires two checks over one shared domain")
+        if lowerings[0]["lhs"] != lowerings[1]["rhs"] or lowerings[0]["rhs"] != lowerings[1]["lhs"]:
+            raise ValueError("equality checks do not prove opposite directions")
+        lines.extend(
+            [
+                "theorem semantic_equality :",
+                "    ∀ (ρ : Nat → ℝ), Box.envMem ρ domain_0 →",
+                "      (∀ i, i ≥ domain_0.length → ρ i = 0) →",
+                "      Expr.eval ρ semantic_lhs_0 = Expr.eval ρ semantic_rhs_0 := by",
+                "  intro ρ hρ htail",
+                "  exact le_antisymm",
+                "    (semantic_claim_0 ρ hρ htail)",
+                "    (semantic_claim_1 ρ hρ htail)",
+                "",
+                "#assert_trust kernel semantic_equality",
+                "",
+            ]
+        )
+    elif shared_domain:
+        proposition = " ∧\n        ".join(
+            f"Expr.eval ρ semantic_lhs_{index} ≤ Expr.eval ρ semantic_rhs_{index}"
+            for index in range(len(certificates))
+        )
+        parts = [f"semantic_claim_{index} ρ hρ htail" for index in range(len(certificates))]
+        nested = parts[-1]
+        for proof in reversed(parts[:-1]):
+            nested = f"⟨{proof}, {nested}⟩"
+        lines.extend(
+            [
+                "theorem semantic_conjunction :",
+                "    ∀ (ρ : Nat → ℝ), Box.envMem ρ domain_0 →",
+                "      (∀ i, i ≥ domain_0.length → ρ i = 0) →",
+                f"      {proposition} := by",
+                "  intro ρ hρ htail",
+                f"  exact {nested}",
+                "",
+                "#assert_trust kernel semantic_conjunction",
                 "",
             ]
         )
     lines.extend(["end LeanCertExport", ""])
     return "\n".join(lines)
+
+
+def _is_equality_claim(claim: ast.Claim | None) -> bool:
+    body = claim
+    while isinstance(body, ast.BoundedForAllClaim):
+        body = body.body
+    return isinstance(body, ast.ComparisonClaim) and body.relation is ast.Relation.EQ
+
+
+def _bound_export_lowerings(
+    result: Verified,
+    certificates: tuple[ReplayableBoundCertificate, ...],
+) -> tuple[dict[str, Any], ...]:
+    axes = () if result.domain is None else result.domain.axes
+    indices = {axis.variable.symbol.identifier: index for index, axis in enumerate(axes)}
+    advertised = frozenset(
+        {
+            "const",
+            "named_const",
+            "var",
+            "add",
+            "mul",
+            "neg",
+            "div",
+            "pow",
+            "inv",
+            "exp",
+            "sin",
+            "cos",
+            "tan",
+            "log",
+            "sqrt",
+            "abs",
+            "min",
+            "max",
+            "atan",
+            "arsinh",
+            "atanh",
+            "sinc",
+            "erf",
+            "sinh",
+            "cosh",
+            "tanh",
+        }
+    )
+    available = list(result.lowerings)
+    selected: list[dict[str, Any]] = []
+    for certificate in certificates:
+        match_index = None
+        for index, lowering in enumerate(available):
+            checked = lower_bridge_expression(
+                compile_semantic_expression(
+                    lowering.checked_expression,
+                    indices,
+                    advertised,
+                )
+            )
+            if (
+                lowering.direction == certificate.direction
+                and lowering.bound == certificate.bound
+                and checked == dict(certificate.expression)
+            ):
+                match_index = index
+                break
+        if match_index is None:
+            raise ValueError("bound certificate has no matching semantic comparison lowering")
+        lowering = available.pop(match_index)
+        selected.append(
+            {
+                "rule": lowering.rule,
+                "lhs": lower_bridge_expression(
+                    compile_semantic_expression(lowering.lhs, indices, advertised)
+                ),
+                "rhs": lower_bridge_expression(
+                    compile_semantic_expression(lowering.rhs, indices, advertised)
+                ),
+            }
+        )
+    return tuple(selected)
 
 
 def _jsonable(value: Any) -> Any:
@@ -178,8 +324,6 @@ def export_verified_bound(result: Verified, path: str, *, verify: bool = True):
             "every checked bound requires a replayable bound-check/2 certificate"
         )
     replay = tuple(item for item in certificates if item is not None)
-    if any(item.expression != replay[0].expression or item.box != replay[0].box for item in replay):
-        return ExportUnsupported("two-sided export requires one shared expression and box")
     provenance = result.provenance
     if not all(
         (
@@ -198,7 +342,11 @@ def export_verified_bound(result: Verified, path: str, *, verify: bool = True):
     if re.fullmatch(r"leanprover/lean4:v[0-9]+\.[0-9]+\.[0-9]+", provenance.lean_toolchain) is None:
         return ExportUnsupported("Lean dependency is not a canonical released toolchain")
     try:
-        lean_source = _render_project(replay)
+        lean_source = _render_project(
+            replay,
+            _bound_export_lowerings(result, replay),
+            equality_claim=_is_equality_claim(result.normalized_claim),
+        )
     except ValueError as exc:
         return ExportUnsupported(str(exc))
 
@@ -306,7 +454,47 @@ def export_verified_bound(result: Verified, path: str, *, verify: bool = True):
             shutil.rmtree(staging)
 
 
-def _render_krawczyk_project(certificate: ReplayableKrawczykCertificate) -> str:
+def export_verified_conjunction(
+    result: VerifiedConjunction,
+    path: str,
+    *,
+    verify: bool = True,
+):
+    """Export a homogeneous conjunction of replayable checked bound children."""
+    if any(isinstance(child, NormalizedTrue) for child in result.children):
+        return ExportUnsupported(
+            "conjunction export does not yet compose exact-normalizer children into Lean evidence"
+        )
+    children = result.children
+    if not children or any(not isinstance(child, Verified) for child in children):
+        return ExportUnsupported(
+            "conjunction export currently supports checked bound children only"
+        )
+    checked = tuple(child for child in children if isinstance(child, Verified))
+    if any(child.provenance != checked[0].provenance for child in checked[1:]):
+        return ExportUnsupported("conjunction children have different Bridge provenance")
+    if any(child.domain != checked[0].domain for child in checked[1:]):
+        return ExportUnsupported("conjunction bound children require one shared domain")
+    synthetic = Verified(
+        expression=None,
+        domain=checked[0].domain,
+        lower=None,
+        upper=None,
+        checks=tuple(check for child in checked for check in child.checks),
+        provenance=checked[0].provenance,
+        lowerings=tuple(lowering for child in checked for lowering in child.lowerings),
+        original_claim=result.original_claim,
+        normalized_claim=result.normalized_claim,
+        claim_id=result.claim_id,
+    )
+    return export_verified_bound(synthetic, path, verify=verify)
+
+
+def _render_krawczyk_project(
+    certificate: ReplayableKrawczykCertificate,
+    *,
+    requested_uniqueness: bool,
+) -> str:
     if (
         certificate.checker != "LeanCert.Engine.krawczykCheck"
         or certificate.verifier != "LeanCert.Validity.verify_unique_system_root"
@@ -346,9 +534,23 @@ def _render_krawczyk_project(certificate: ReplayableKrawczykCertificate) -> str:
             "    krawczykCheck system box certificate config = true := by",
             "  decide +kernel",
             "",
-            "theorem exported_claim :",
+            "theorem exported_unique_root :",
             "    ∃! x, FinBoxMem x box ∧ SystemZero system x :=",
             "  verify_unique_system_root system box certificate config certificate_check",
+            "",
+            *(
+                [
+                    "theorem exported_claim :",
+                    "    ∃! x, FinBoxMem x box ∧ SystemZero system x :=",
+                    "  exported_unique_root",
+                ]
+                if requested_uniqueness
+                else [
+                    "theorem exported_claim :",
+                    "    ∃ x, FinBoxMem x box ∧ SystemZero system x :=",
+                    "  exported_unique_root.exists",
+                ]
+            ),
             "",
             "#assert_trust kernel exported_claim",
             "",
@@ -377,7 +579,10 @@ def export_verified_system_root(result: VerifiedSystemRoot, path: str, *, verify
     if re.fullmatch(r"[0-9a-f]{40}", provenance.leancert_resolved_revision) is None:
         return ExportUnsupported("LeanCert dependency is not pinned to a full Git revision")
     try:
-        lean_source = _render_krawczyk_project(certificate)
+        lean_source = _render_krawczyk_project(
+            certificate,
+            requested_uniqueness=result.requested_uniqueness,
+        )
     except ValueError as exc:
         return ExportUnsupported(str(exc))
 

@@ -49,8 +49,10 @@ def verified_response(system: list[dict], box: list[dict]) -> dict:
         "system": [_bridge_core_expression(item) for item in system],
         "box": box,
         "center": [rat(1), rat(1)],
-        "preconditioner": [[rat(Fraction(2, 3)), rat(Fraction(-1, 3))],
-                           [rat(Fraction(-1, 3)), rat(Fraction(2, 3))]],
+        "preconditioner": [
+            [rat(Fraction(2, 3)), rat(Fraction(-1, 3))],
+            [rat(Fraction(-1, 3)), rat(Fraction(2, 3))],
+        ],
         "config": {"taylor_depth": 10},
     }
     return {
@@ -100,9 +102,7 @@ def coupled_claim():
             y: (Fraction(9, 10), Fraction(11, 10)),
         }
     )
-    return ast.unique_system_root(
-        (x**2 + y - 2, x + y**2 - 2), variables=(x, y), within=domain
-    )
+    return ast.unique_system_root((x**2 + y - 2, x + y**2 - 2), variables=(x, y), within=domain)
 
 
 def test_prove_unique_system_root_retains_checked_evidence():
@@ -145,15 +145,17 @@ def test_candidate_rejection_is_not_verification_or_refutation():
     assert "exhausted" in result.reason
 
 
-def test_existence_only_system_claim_is_typed_unsupported_without_bridge_call():
+def test_existence_only_system_claim_reuses_stronger_uniqueness_certificate():
     unique = coupled_claim()
     claim = ast.system_root_exists(
         unique.equations, variables=unique.variables, within=unique.domain
     )
     client = FakeSystemRootClient()
     result = lc.prove(claim, client=client)
-    assert isinstance(result, lc.UnsupportedSystemRoot)
-    assert client.calls == []
+    assert isinstance(result, lc.VerifiedSystemRoot)
+    assert result.requested_uniqueness is False
+    assert result.established_uniqueness is True
+    assert len(client.calls) == 1
 
 
 def test_tampered_krawczyk_authority_and_payload_are_rejected():
@@ -184,9 +186,7 @@ def test_verified_system_root_exports_fixed_kernel_project(tmp_path):
     result = lc.prove(coupled_claim(), client=FakeSystemRootClient())
     exported = result.export_lean_project(tmp_path / "root-proof", verify=False)
     assert isinstance(exported, lc.ExportPrepared)
-    source = (tmp_path / "root-proof" / "LeanCertExport.lean").read_text(
-        encoding="utf-8"
-    )
+    source = (tmp_path / "root-proof" / "LeanCertExport.lean").read_text(encoding="utf-8")
     assert "krawczykCheck system box certificate config = true" in source
     assert "verify_unique_system_root" in source
     assert "#assert_trust kernel exported_claim" in source
@@ -194,6 +194,22 @@ def test_verified_system_root_exports_fixed_kernel_project(tmp_path):
         (tmp_path / "root-proof" / "certificate.json").read_text(encoding="utf-8")
     )
     assert manifest["schema_version"] == "krawczyk-check/1"
+
+
+def test_existence_export_states_the_requested_weaker_theorem(tmp_path):
+    unique = coupled_claim()
+    claim = ast.system_root_exists(
+        unique.equations, variables=unique.variables, within=unique.domain
+    )
+    result = lc.prove(claim, client=FakeSystemRootClient())
+
+    exported = result.export_lean_project(tmp_path / "existence-proof", verify=False)
+
+    assert isinstance(exported, lc.ExportPrepared)
+    source = (tmp_path / "existence-proof" / "LeanCertExport.lean").read_text()
+    assert "theorem exported_unique_root" in source
+    assert "theorem exported_claim :\n    ∃ x," in source
+    assert "exported_unique_root.exists" in source
 
 
 def test_candidate_shapes_and_numbers_are_validated_locally():
