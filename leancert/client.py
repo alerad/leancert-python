@@ -778,9 +778,7 @@ class LeanClient:
             "taylorDepth": taylor_depth,
         }
         response = self.call("check_scalar_root", request)
-        outcome = self.bridge_contract.parse_scalar_root_outcome(
-            response, expected_claim=claim
-        )
+        outcome = self.bridge_contract.parse_scalar_root_outcome(response, expected_claim=claim)
         if outcome.certificate is not None:
             payload = outcome.certificate.payload
             expected_expression = _bridge_core_expression(expr_json)
@@ -799,6 +797,57 @@ class LeanClient:
             if actual_interval != expected_interval or payload.taylor_depth != taylor_depth:
                 raise ProtocolViolation(
                     "scalar-root certificate interval or Taylor depth contradicts the request"
+                )
+        return response
+
+    def check_integral(
+        self,
+        expr_json: dict[str, Any],
+        interval_json: dict[str, Any],
+        relation: str,
+        bound: Fraction,
+        *,
+        start_partitions: int = 32,
+        max_partitions: int = 4096,
+    ) -> dict[str, Any]:
+        """Check an exact equality or one-sided bound through Contract 2.6."""
+        if relation not in {"eq", "lower", "upper"}:
+            raise ValueError("integral relation must be eq, lower, or upper")
+        request = {
+            "expr": expr_json,
+            "interval": interval_json,
+            "relation": relation,
+            "bound": {"n": bound.numerator, "d": bound.denominator},
+            "startPartitions": start_partitions,
+            "maxPartitions": max_partitions,
+        }
+        response = self.call("check_integral", request)
+        outcome = self.bridge_contract.parse_integral_outcome(response, expected_relation=relation)
+        expected_interval = (
+            Fraction(interval_json["lo"]["n"], interval_json["lo"]["d"]),
+            Fraction(interval_json["hi"]["n"], interval_json["hi"]["d"]),
+        )
+        actual_outcome_interval = (
+            outcome.interval.lower.fraction,
+            outcome.interval.upper.fraction,
+        )
+        if actual_outcome_interval != expected_interval or outcome.bound.fraction != bound:
+            raise ProtocolViolation("integral outcome contradicts the checked request")
+        if outcome.certificate is not None:
+            payload = outcome.certificate.payload
+            expected_expression = _bridge_core_expression(expr_json)
+            actual_interval = (
+                payload.interval.lower.fraction,
+                payload.interval.upper.fraction,
+            )
+            if (
+                dict(payload.expression) != expected_expression
+                or actual_interval != expected_interval
+                or payload.relation != relation
+                or payload.bound.fraction != bound
+            ):
+                raise ProtocolViolation(
+                    "integral certificate payload contradicts the checked request"
                 )
         return response
 

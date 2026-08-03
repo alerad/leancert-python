@@ -39,6 +39,8 @@ Bridge Contract 2.4 adds exact reciprocal-power eventual bounds with supplied
 or automatically discovered natural-number cutoffs.
 Bridge Contract 2.5 adds fixed, replayable scalar-root checks for existence,
 uniqueness, and exclusion on exact rational intervals.
+Bridge Contract 2.6 adds exact polynomial integral equalities and replayable
+one-sided integral bounds with fixed checked partitions.
 
 Exported projects can be audited without rerunning Python or numerical search:
 
@@ -93,6 +95,11 @@ eventual = lc.prove(
 unique = lc.prove(ast.unique_root(x, variable=x, within=(-1, 1)))
 if isinstance(unique, lc.VerifiedUniqueRoot):
     unique.export_lean_project("verified-unique-root")
+
+# Exact polynomial integration and checked one-sided bounds.
+area = ast.integral(x**2, x, 0, 1)
+exact_area = lc.prove(ast.eq(area, Fraction(1, 3)))
+bounded_area = lc.prove(area <= Fraction(1, 2))
 ```
 
 ## Neural Network Verification

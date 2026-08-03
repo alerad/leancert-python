@@ -417,6 +417,87 @@ class UnsupportedScalarRoot(ScalarRootResult):
 
 
 @dataclass(frozen=True)
+class IntegralSearchEvidence:
+    source: Literal["exact", "automatic"]
+    start_partitions: int | None = None
+    max_partitions: int | None = None
+    chosen_partitions: int | None = None
+    attempts: int = 0
+    failure: Mapping[str, Any] | None = None
+
+
+@dataclass(frozen=True)
+class ReplayableIntegralCertificate:
+    schema_version: str
+    payload_schema: str
+    checker: str
+    verifier: str
+    verification_route: str
+    payload_digest: str
+    expression: Mapping[str, Any]
+    interval: Interval
+    relation: Literal["eq", "lower", "upper"]
+    bound: Fraction
+    partitions: int | None
+    canonical_payload: Mapping[str, Any]
+
+
+@dataclass(frozen=True)
+class CheckedIntegralResult(ProofResult):
+    integrand: Any
+    variable: Any
+    domain: Any
+    relation: Literal["eq", "lower", "upper"]
+    bound: Fraction
+    enclosure: Interval | None
+    provenance: BridgeProvenance
+    search: IntegralSearchEvidence
+    original_claim: Any | None = field(default=None, kw_only=True)
+    normalized_claim: Any | None = field(default=None, kw_only=True)
+    claim_id: Any | None = field(default=None, kw_only=True)
+
+
+@dataclass(frozen=True)
+class VerifiedIntegralEquality(CheckedIntegralResult):
+    certificate: ReplayableIntegralCertificate
+
+    def export_lean_project(self, path: str, *, verify: bool = True):
+        from .export import export_verified_integral
+
+        return export_verified_integral(self, path, verify=verify)
+
+
+@dataclass(frozen=True)
+class VerifiedIntegralBound(CheckedIntegralResult):
+    certificate: ReplayableIntegralCertificate
+
+    def export_lean_project(self, path: str, *, verify: bool = True):
+        from .export import export_verified_integral
+
+        return export_verified_integral(self, path, verify=verify)
+
+
+@dataclass(frozen=True)
+class IntegralCandidateRejected(CheckedIntegralResult):
+    reason: str
+
+
+@dataclass(frozen=True)
+class InconclusiveIntegral(CheckedIntegralResult):
+    reason: str
+
+
+@dataclass(frozen=True)
+class IntegralDomainObstruction(CheckedIntegralResult):
+    reason: str
+
+
+@dataclass(frozen=True)
+class UnsupportedIntegral(CheckedIntegralResult):
+    reason: str
+
+
+@dataclass(frozen=True)
 class EventualSearchEvidence:
     source: Literal["automatic", "provided"]
     checks: int | None = None

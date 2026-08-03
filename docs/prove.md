@@ -69,8 +69,8 @@ replayable bound children as separate checked theorems plus a kernel-checked
 conjunction theorem. If any child is unsupported or inconclusive, the result is
 `IncompleteConjunction`; successful siblings are not discarded.
 
-Strict inequalities, integrals, and external functions currently
-return `Unsupported`. They are not routed through a
+Strict inequalities and external functions currently return `Unsupported`.
+They are not routed through a
 discovery API or silently weakened to non-strict bounds. A bridge that does not
 advertise an expression node receives no request for that node. The semantic
 AST constants `ast.e` and `ast.log_two` currently have no Lean Core wire
@@ -163,6 +163,35 @@ corresponding Golden Theorem. `ScalarRootCandidateRejected` means only that
 the supplied interval did not satisfy the requested checker; it is not a
 proof that the mathematical claim is false. All three verified outcomes
 support standalone kernel replay with `export_lean_project()`.
+
+## Definite integrals
+
+Contract 2.6 distinguishes exact integration from enclosure-based bounds:
+
+```python
+from fractions import Fraction
+
+x = ast.var("x")
+area = ast.integral(x**2, x, 0, 1)
+
+exact = lc.prove(ast.eq(area, Fraction(1, 3)))
+upper = lc.prove(area <= Fraction(1, 2))
+lower = lc.prove(Fraction(1, 4) <= area)
+```
+
+`VerifiedIntegralEquality` is available only when the rational-polynomial
+checker computes the exact claimed value. `VerifiedIntegralBound` retains the
+fixed uniform partition count accepted by the lower- or upper-bound checker.
+Partition discovery is untrusted and its limits are configurable:
+
+```python
+config = lc.ProveConfig(
+    integral=lc.IntegralConfig(start_partitions=16, max_partitions=4096),
+)
+```
+
+A numerical enclosure never establishes equality. Verified equality and bound
+results both support standalone kernel replay with `export_lean_project()`.
 
 ## Opt-in checked refutation
 

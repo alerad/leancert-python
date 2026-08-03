@@ -25,11 +25,14 @@ from .result import (
     NormalizedTrue,
     ReplayableBoundCertificate,
     ReplayableEventualCertificate,
+    ReplayableIntegralCertificate,
     ReplayableKrawczykCertificate,
     ReplayableScalarRootCertificate,
     Verified,
     VerifiedConjunction,
     VerifiedEventualBound,
+    VerifiedIntegralBound,
+    VerifiedIntegralEquality,
     VerifiedRootExclusion,
     VerifiedRootExistence,
     VerifiedSystemRoot,
@@ -102,9 +105,7 @@ def _core_support_proof(node: Any) -> str:
             f"(ExprSupportedCore.{kind} {_core_support_proof(node['e1'])} "
             f"{_core_support_proof(node['e2'])})"
         )
-    if kind in {
-        "neg", "sin", "cos", "exp", "log", "sqrt", "sinh", "cosh", "tanh", "erf"
-    }:
+    if kind in {"neg", "sin", "cos", "exp", "log", "sqrt", "sinh", "cosh", "tanh", "erf"}:
         return f"(ExprSupportedCore.{kind} {_core_support_proof(node['e'])})"
     if kind == "named_const":
         name = "pi" if node["name"] == "pi" else "eulerMascheroni"
@@ -1120,8 +1121,231 @@ def export_verified_scalar_root(
             shutil.rmtree(staging)
 
 
+def _render_integral_project(certificate: ReplayableIntegralCertificate) -> str:
+    expression = _core_expression(certificate.expression)
+    interval = _interval(certificate.interval)
+    expected = {
+        "eq": (
+            "LeanCert.Engine.QPoly.checkExactIntegral",
+            "LeanCert.Engine.QPoly.integral_eq_of_check",
+        ),
+        "lower": (
+            "LeanCert.Validity.Integration.checkIntegralPartitionLowerBound",
+            "LeanCert.Validity.Integration.integral_partition_lower_of_check",
+        ),
+        "upper": (
+            "LeanCert.Validity.Integration.checkIntegralPartitionUpperBound",
+            "LeanCert.Validity.Integration.integral_partition_upper_of_check",
+        ),
+    }[certificate.relation]
+    if (certificate.checker, certificate.verifier) != expected:
+        raise ValueError("certificate authority is not the supported integral boundary")
+    lines = [
+        "import LeanCert.Engine.Algebra.QPolyIntegral",
+        "import LeanCert.Meta.ProveContinuous",
+        "import LeanCert.Tactic.Verification",
+        "import LeanCert.Validity.Integration",
+        "",
+        "open MeasureTheory",
+        "open LeanCert.Core LeanCert.Engine LeanCert.Validity",
+        "",
+        "namespace LeanCertExport",
+        "",
+        f"def expression : Expr := {expression}",
+        f"def interval : IntervalRat := {interval}",
+        "",
+    ]
+    if certificate.relation == "eq":
+        if certificate.partitions is not None:
+            raise ValueError("exact integral certificate unexpectedly retains partitions")
+        lines.extend(
+            [
+                "theorem certificate_check :",
+                "    QPoly.checkExactIntegral expression interval.lo interval.hi",
+                f"      {_rat(certificate.bound)} = true := by",
+                "  decide +kernel",
+                "",
+                "theorem exported_claim :",
+                "    (∫ x in (interval.lo : ℝ)..(interval.hi : ℝ),",
+                "      Expr.eval (fun _ => x) expression) =",
+                f"      (({_rat(certificate.bound)}) : ℝ) :=",
+                "  QPoly.integral_eq_of_check expression interval.lo interval.hi",
+                f"    {_rat(certificate.bound)} certificate_check",
+            ]
+        )
+    else:
+        if certificate.partitions is None or certificate.partitions <= 0:
+            raise ValueError("bounded integral certificate lacks positive partitions")
+        support = _support_proof(certificate.expression)
+        checker = expected[0].split(".")[-1]
+        verifier = expected[1].split(".")[-1]
+        proposition = (
+            f"    (({_rat(certificate.bound)}) : ℝ) ≤\n"
+            "      ∫ x in (interval.lo : ℝ)..(interval.hi : ℝ),\n"
+            "        Expr.eval (fun _ => x) expression :="
+            if certificate.relation == "lower"
+            else "    (∫ x in (interval.lo : ℝ)..(interval.hi : ℝ),\n"
+            "      Expr.eval (fun _ => x) expression) ≤\n"
+            f"      (({_rat(certificate.bound)}) : ℝ) :="
+        )
+        lines.extend(
+            [
+                "theorem expression_supported : ADSupported expression := by",
+                "  unfold expression",
+                f"  exact {support}",
+                "",
+                "theorem expression_domain_valid :",
+                "    LeanCert.Meta.exprContinuousDomainValid expression",
+                "      (Set.Icc (interval.lo : ℝ) interval.hi) :=",
+                "  LeanCert.Meta.exprContinuousDomainValid_of_ExprSupported expression_supported",
+                "",
+                "theorem expression_integrable :",
+                "    IntervalIntegrable (fun x => Expr.eval (fun _ => x) expression)",
+                "      MeasureTheory.volume interval.lo interval.hi :=",
+                "  LeanCert.Validity.Integration.exprSupportedCore_intervalIntegrable",
+                "    expression expression_supported.toCore interval expression_domain_valid",
+                "",
+                "theorem certificate_check :",
+                f"    LeanCert.Validity.Integration.{checker} expression interval",
+                f"      {certificate.partitions} {_rat(certificate.bound)} = true := by",
+                "  decide +kernel",
+                "",
+                "theorem exported_claim :",
+                proposition,
+                f"  LeanCert.Validity.Integration.{verifier}",
+                f"    expression interval {certificate.partitions} (by norm_num)",
+                f"    {_rat(certificate.bound)} certificate_check expression_integrable",
+            ]
+        )
+    lines.extend(["", "#assert_trust kernel exported_claim", "", "end LeanCertExport", ""])
+    return "\n".join(lines)
+
+
+def export_verified_integral(
+    result: VerifiedIntegralEquality | VerifiedIntegralBound,
+    path: str,
+    *,
+    verify: bool = True,
+):
+    """Create a standalone fixed integral project and optionally kernel-check it."""
+    certificate = result.certificate
+    provenance = result.provenance
+    if not all(
+        (
+            provenance.lean_toolchain,
+            provenance.leancert_source,
+            provenance.leancert_resolved_revision,
+        )
+    ):
+        return ExportUnsupported("bridge provenance lacks dependency identities")
+    if provenance.leancert_source != "https://github.com/alerad/leancert.git":
+        return ExportUnsupported("export requires the canonical LeanCert repository")
+    assert provenance.leancert_resolved_revision is not None
+    assert provenance.lean_toolchain is not None
+    if re.fullmatch(r"[0-9a-f]{40}", provenance.leancert_resolved_revision) is None:
+        return ExportUnsupported("LeanCert dependency is not pinned to a full Git revision")
+    try:
+        lean_source = _render_integral_project(certificate)
+    except ValueError as exc:
+        return ExportUnsupported(str(exc))
+
+    output = Path(path).expanduser().resolve()
+    if output.exists():
+        raise FileExistsError(f"export destination already exists: {output}")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    artifact = LeanProjectArtifact(str(output), str(result.claim_id), (certificate.payload_digest,))
+    lakefile = (
+        'name = "LeanCertExport"\n'
+        'version = "0.1.0"\n\n'
+        'defaultTargets = ["LeanCertExport"]\n\n'
+        "[[require]]\n"
+        'name = "leancert"\n'
+        f'git = "{provenance.leancert_source}"\n'
+        f'rev = "{provenance.leancert_resolved_revision}"\n\n'
+        "[[lean_lib]]\n"
+        'name = "LeanCertExport"\n'
+    )
+    staging = Path(tempfile.mkdtemp(prefix=f".{output.name}.", dir=str(output.parent))).resolve()
+    try:
+        (staging / "lean-toolchain").write_text(f"{provenance.lean_toolchain}\n", encoding="utf-8")
+        (staging / "lakefile.toml").write_text(lakefile, encoding="utf-8")
+        (staging / "LeanCertExport.lean").write_text(lean_source, encoding="utf-8")
+        (staging / "claim.json").write_text(
+            json.dumps(ast.encode_canonical(result.normalized_claim), indent=2, sort_keys=True)
+            + "\n",
+            encoding="utf-8",
+        )
+        (staging / "certificate.json").write_text(
+            json.dumps(
+                {
+                    "claim_id": str(result.claim_id),
+                    "schema_version": certificate.schema_version,
+                    "payload_digest": certificate.payload_digest,
+                    "checker": certificate.checker,
+                    "verifier": certificate.verifier,
+                    "verification_route": certificate.verification_route,
+                    "payload": _jsonable(certificate.canonical_payload),
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        (staging / "provenance.json").write_text(
+            json.dumps(_jsonable(asdict(provenance)), indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        (staging / "README.md").write_text(
+            "# LeanCert exported integral proof\n\n"
+            f"This project replays a fixed `{certificate.relation}` integral certificate.\n\n"
+            "```bash\nlake update\nlake build\n```\n",
+            encoding="utf-8",
+        )
+        write_export_manifest(
+            staging,
+            claim_id=artifact.claim_id,
+            certificate_digests=artifact.certificate_digests,
+        )
+        if verify:
+            lake = shutil.which("lake")
+            if lake is None:
+                return ExportDependencyUnavailable("lake is not available on PATH")
+            try:
+                process = subprocess.run(
+                    [lake, "build", "LeanCertExport"],
+                    cwd=staging,
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    timeout=900,
+                    check=False,
+                )
+            except subprocess.TimeoutExpired as exc:
+                output_text = exc.stdout or ""
+                if isinstance(output_text, bytes):
+                    output_text = output_text.decode(errors="replace")
+                return ExportResourceLimit(
+                    artifact, "kernel replay exceeded the export time limit", 900, output_text
+                )
+            if process.returncode != 0:
+                return ExportVerificationMismatch(
+                    artifact, "exported project did not kernel-check", process.stdout
+                )
+        staging.rename(output)
+        staging = output
+        if not verify:
+            return ExportPrepared(artifact)
+        return ExportVerified(artifact, "kernel", process.stdout)
+    finally:
+        if staging != output and staging.exists():
+            shutil.rmtree(staging)
+
+
 __all__ = [
     "export_verified_bound",
     "export_verified_eventual_bound",
+    "export_verified_integral",
+    "export_verified_scalar_root",
     "export_verified_system_root",
 ]

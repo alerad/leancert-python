@@ -68,9 +68,15 @@ claim, expression, interval, Taylor depth, checker, and verifier in the
 certificate to match the negotiated request. A rejected interval carries no
 certificate and is never upgraded to a refutation.
 
+Contract 2.6 adds `check_integral` and `integral-check/1` certificates for
+exact rational-polynomial equalities and fixed-partition lower or upper bounds.
+Partition discovery is untrusted; exact equality never falls back to a
+numerical enclosure.
+
 The certificate families are intentionally distinct: adaptive evidence may
 close checked subdivision leaves, while `bound-check/2` and
-`krawczyk-check/1`, `eventual-bound-check/1`, and `scalar-root-check/1` support standalone project
+`krawczyk-check/1`, `eventual-bound-check/1`, `scalar-root-check/1`, and
+`integral-check/1` support standalone project
 export.
 
 Golden fixtures live under
