@@ -209,8 +209,8 @@ jobs:
           x = ast.var('x')
           checked = lc.prove(x**2 <= 1, where={x: (0, 1)})
           assert isinstance(checked, lc.Verified)
-          assert checked.provenance.bridge_api_version == '2.4.0'
-          assert checked.provenance.protocol_version == '2.4.0'
+          assert checked.provenance.bridge_api_version == '2.5.0'
+          assert checked.provenance.protocol_version == '2.5.0'
           assert checked.provenance.lean_version
           assert checked.provenance.build_profile == 'release'
           assert checked.provenance.source_digest.startswith('sha256:')

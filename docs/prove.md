@@ -69,7 +69,7 @@ replayable bound children as separate checked theorems plus a kernel-checked
 conjunction theorem. If any child is unsupported or inconclusive, the result is
 `IncompleteConjunction`; successful siblings are not discarded.
 
-Strict inequalities, scalar roots, integrals, and external functions currently
+Strict inequalities, integrals, and external functions currently
 return `Unsupported`. They are not routed through a
 discovery API or silently weakened to non-strict bounds. A bridge that does not
 advertise an expression node receives no request for that node. The semantic
@@ -143,6 +143,27 @@ requested existence theorem from it. `VerifiedSystemRoot` records both
 `requested_uniqueness` and `established_uniqueness` so this strengthening is
 never implicit.
 
+## Scalar roots
+
+Contract 2.5 checks a supplied exact interval without treating numerical
+search as proof authority:
+
+```python
+x = ast.var("x")
+
+exists = lc.prove(ast.root_exists(x, variable=x, within=(-1, 1)))
+unique = lc.prove(ast.unique_root(x, variable=x, within=(-1, 1)))
+excluded = lc.prove(ast.root_excluded(x + 2, variable=x, within=(-1, 1)))
+```
+
+The successful outcomes are `VerifiedRootExistence`, `VerifiedUniqueRoot`,
+and `VerifiedRootExclusion`. They retain respectively the fixed
+`checkSignChange`, `checkNewtonContractsCore`, or `checkNoRoot` input and the
+corresponding Golden Theorem. `ScalarRootCandidateRejected` means only that
+the supplied interval did not satisfy the requested checker; it is not a
+proof that the mathematical claim is false. All three verified outcomes
+support standalone kernel replay with `export_lean_project()`.
+
 ## Opt-in checked refutation
 
 By default, an enclosure that does not establish a bound is
@@ -211,6 +232,7 @@ Ordinary mathematical non-success remains a typed result:
 - `VerifiedConjunction` / `IncompleteConjunction`: child-preserving recursive results;
 - `CandidateRejected`: a system-root candidate failed its fixed checker.
 - `EventualCandidateRejected`: a supplied or discovered cutoff was rejected.
+- `ScalarRootCandidateRejected`: the supplied interval failed its fixed root checker.
 - `InconclusiveEventualBound`: cutoff discovery exhausted its budget.
 
 `verify_bound` remains available for the pre-1.0 expression API but is

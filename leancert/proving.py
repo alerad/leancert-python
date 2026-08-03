@@ -16,6 +16,7 @@ from .operations.eventual import (
     try_plan_eventual_claim,
     unsupported_eventual,
 )
+from .operations.scalar_roots import execute_scalar_root_claim
 from .operations.system_roots import (
     SystemRootPlan,
     execute_system_root_plan,
@@ -28,7 +29,10 @@ from .result import (
     Verified,
     VerifiedConjunction,
     VerifiedEventualBound,
+    VerifiedRootExclusion,
+    VerifiedRootExistence,
     VerifiedSystemRoot,
+    VerifiedUniqueRoot,
 )
 
 
@@ -284,7 +288,16 @@ def _logical_constant(claim: ast.Claim) -> bool | None:
 def _established(result: ProofResult) -> bool:
     return isinstance(
         result,
-        (Verified, VerifiedSystemRoot, VerifiedEventualBound, VerifiedConjunction, NormalizedTrue),
+        (
+            Verified,
+            VerifiedSystemRoot,
+            VerifiedEventualBound,
+            VerifiedRootExistence,
+            VerifiedUniqueRoot,
+            VerifiedRootExclusion,
+            VerifiedConjunction,
+            NormalizedTrue,
+        ),
     )
 
 
@@ -310,6 +323,15 @@ def _prove_normalized(
             claim_id=claim_id,
             client=client,
             config=config.system_root,
+            taylor_depth=config.taylor_depth,
+        )
+    if isinstance(normalized_claim, ast.RootExistsClaim):
+        return execute_scalar_root_claim(
+            normalized_claim,
+            original_claim=original_claim,
+            normalized_claim=normalized_claim,
+            claim_id=claim_id,
+            client=client,
             taylor_depth=config.taylor_depth,
         )
     if isinstance(normalized_claim, ast.EventualClaim):

@@ -198,7 +198,6 @@ def test_normalization_gives_equivalent_claims_the_same_identity():
     "claim",
     [
         lambda x: x < 1,
-        lambda x: ast.root_exists(x, variable=x, within=ast.interval(0, 1)),
     ],
 )
 def test_unwired_claim_families_are_typed_unsupported_without_bridge_call(claim):
@@ -210,6 +209,16 @@ def test_unwired_claim_families_are_typed_unsupported_without_bridge_call(claim)
     result = lc.prove(value, where=where, client=client)
 
     assert isinstance(result, lc.Unsupported)
+    assert result.claim_id == ast.semantic_digest(result.normalized_claim)
+    assert client.calls == []
+
+
+def test_unadvertised_scalar_root_capability_is_typed_unsupported():
+    x = ast.var("x")
+    client = FakeCheckedClient()
+    result = lc.prove(ast.root_exists(x, variable=x, within=(0, 1)), client=client)
+
+    assert isinstance(result, lc.UnsupportedScalarRoot)
     assert result.claim_id == ast.semantic_digest(result.normalized_claim)
     assert client.calls == []
 

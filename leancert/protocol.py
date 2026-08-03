@@ -357,6 +357,30 @@ class BridgeHandshake:
                 )
         return outcome
 
+    def parse_scalar_root_outcome(
+        self, value: Any, *, expected_claim: str
+    ) -> ScalarRootOperationOutcome:
+        capability = self.capability("check_scalar_root")
+        if capability is None:
+            raise ProtocolViolation(
+                "bridge returned a scalar-root outcome without check_scalar_root capability"
+            )
+        outcome = ScalarRootOperationOutcome.parse(value, expected_claim=expected_claim)
+        if outcome.status not in capability.outcomes:
+            raise ProtocolViolation("scalar-root status was not advertised")
+        if outcome.backend not in capability.backends:
+            raise ProtocolViolation("scalar-root backend was not advertised")
+        if outcome.certificate is not None:
+            if outcome.certificate.schema_version not in capability.certificate_schemas:
+                raise ProtocolViolation("scalar-root certificate schema was not advertised")
+            if outcome.certificate.verification_route not in capability.verification_routes:
+                raise ProtocolViolation("scalar-root verification route was not advertised")
+            if outcome.certificate.schema_version not in self.certificate_schemas:
+                raise ProtocolViolation(
+                    "scalar-root certificate schema is absent from handshake"
+                )
+        return outcome
+
     @classmethod
     def parse(cls, value: Any) -> BridgeHandshake:
         obj = _object(value, "get_info result")
@@ -1055,6 +1079,132 @@ class SystemRootOperationOutcome:
             certificate,
             MappingProxyType(dict(obj)),
         )
+
+
+SCALAR_ROOT_AUTHORITIES = {
+    "exists": (
+        "LeanCert.Validity.RootFinding.checkSignChange",
+        "LeanCert.Validity.RootFinding.verify_sign_change",
+    ),
+    "unique": (
+        "LeanCert.Validity.RootFinding.checkNewtonContractsCore",
+        "LeanCert.Validity.RootFinding.verify_unique_root_computable",
+    ),
+    "excluded": (
+        "LeanCert.Validity.RootFinding.checkNoRoot",
+        "LeanCert.Validity.RootFinding.verify_no_root",
+    ),
+}
+
+
+@dataclass(frozen=True, slots=True)
+class ReplayScalarRootPayload:
+    expression: Mapping[str, Any]
+    interval: WireEnclosure
+    claim: str
+    taylor_depth: int
+    canonical: Mapping[str, Any]
+
+    @classmethod
+    def parse(cls, value: Any) -> ReplayScalarRootPayload:
+        obj = _object(value, "scalar-root certificate payload")
+        if set(obj) != {"schema_version", "expression", "interval", "claim", "config"}:
+            raise ProtocolViolation("scalar-root payload fields are not canonical")
+        if obj["schema_version"] != "checked-scalar-root/1":
+            raise ProtocolViolation("scalar-root replay payload schema is unsupported")
+        expression = _freeze_json(_object(obj["expression"], "scalar-root expression"))
+        interval = WireEnclosure.parse(obj["interval"], "scalar-root interval")
+        claim = _string(obj["claim"], "scalar-root claim")
+        if claim not in SCALAR_ROOT_AUTHORITIES:
+            raise ProtocolViolation("scalar-root claim kind is unknown")
+        config = _object(obj["config"], "scalar-root config")
+        if set(config) != {"taylor_depth"}:
+            raise ProtocolViolation("scalar-root config fields are not canonical")
+        depth = config["taylor_depth"]
+        if isinstance(depth, bool) or not isinstance(depth, int) or depth < 0:
+            raise ProtocolViolation("scalar-root Taylor depth must be a natural number")
+        canonical = _freeze_json(dict(obj))
+        assert claim is not None
+        return cls(expression, interval, claim, depth, canonical)
+
+    @property
+    def digest(self) -> str:
+        encoded = json.dumps(
+            _plain_json(self.canonical), sort_keys=True, separators=(",", ":")
+        ).encode()
+        return "sha256:" + hashlib.sha256(encoded).hexdigest()
+
+
+@dataclass(frozen=True, slots=True)
+class ScalarRootCertificateDescriptor:
+    schema_version: str
+    checker: str
+    verifier: str
+    verification_route: str
+    payload: ReplayScalarRootPayload
+
+    @classmethod
+    def parse(cls, value: Any) -> ScalarRootCertificateDescriptor:
+        obj = _object(value, "scalar-root certificate")
+        if set(obj) != {"schema_version", "checker", "verifier", "verification_route", "payload"}:
+            raise ProtocolViolation("scalar-root certificate fields are not canonical")
+        if obj["schema_version"] != "scalar-root-check/1":
+            raise ProtocolViolation("scalar-root certificate schema is unsupported")
+        payload = ReplayScalarRootPayload.parse(obj["payload"])
+        checker, verifier = SCALAR_ROOT_AUTHORITIES[payload.claim]
+        if obj["checker"] != checker or obj["verifier"] != verifier:
+            raise ProtocolViolation("scalar-root certificate authority is not recognized")
+        if obj["verification_route"] != "compiled_checker":
+            raise ProtocolViolation("scalar-root verification route is unsupported")
+        return cls(obj["schema_version"], checker, verifier, obj["verification_route"], payload)
+
+
+@dataclass(frozen=True, slots=True)
+class ScalarRootOperationOutcome:
+    status: OutcomeStatus
+    claim: str
+    backend: str
+    interval: WireEnclosure
+    certificate: ScalarRootCertificateDescriptor | None
+    raw: Mapping[str, Any]
+
+    @classmethod
+    def parse(cls, value: Any, *, expected_claim: str) -> ScalarRootOperationOutcome:
+        obj = _object(value, "check_scalar_root result")
+        required = {"verified", "status", "claim", "backend", "interval", "certificate"}
+        if set(obj) != required:
+            raise ProtocolViolation("scalar-root outcome fields are not canonical")
+        if not isinstance(obj["verified"], bool):
+            raise ProtocolViolation("scalar-root verified flag must be boolean")
+        try:
+            status = OutcomeStatus(obj["status"])
+        except (TypeError, ValueError) as exc:
+            raise ProtocolViolation("scalar-root status is unknown") from exc
+        if status not in {
+            OutcomeStatus.VERIFIED,
+            OutcomeStatus.CANDIDATE_REJECTED,
+            OutcomeStatus.UNSUPPORTED,
+        }:
+            raise ProtocolViolation("scalar-root status is invalid for this operation")
+        if obj["verified"] != (status is OutcomeStatus.VERIFIED):
+            raise ProtocolViolation("scalar-root verified flag contradicts status")
+        claim = _string(obj["claim"], "scalar-root claim")
+        if claim != expected_claim or claim not in SCALAR_ROOT_AUTHORITIES:
+            raise ProtocolViolation("scalar-root claim contradicts the request")
+        backend = _string(obj["backend"], "scalar-root backend")
+        interval = WireEnclosure.parse(obj["interval"], "scalar-root interval")
+        certificate = (
+            None
+            if obj["certificate"] is None
+            else ScalarRootCertificateDescriptor.parse(obj["certificate"])
+        )
+        if (status is OutcomeStatus.VERIFIED) != (certificate is not None):
+            raise ProtocolViolation("only verified scalar-root outcomes may retain a certificate")
+        if certificate is not None:
+            if certificate.payload.claim != claim or certificate.payload.interval != interval:
+                raise ProtocolViolation("scalar-root certificate contradicts the outcome")
+        assert claim is not None and backend is not None
+        return cls(status, claim, backend, interval, certificate, MappingProxyType(dict(obj)))
 
 
 @dataclass(frozen=True, slots=True)

@@ -37,6 +37,8 @@ certified by exact rational Krawczyk certificates; NumPy and SciPy candidates
 remain untrusted inputs.
 Bridge Contract 2.4 adds exact reciprocal-power eventual bounds with supplied
 or automatically discovered natural-number cutoffs.
+Bridge Contract 2.5 adds fixed, replayable scalar-root checks for existence,
+uniqueness, and exclusion on exact rational intervals.
 
 Exported projects can be audited without rerunning Python or numerical search:
 
@@ -86,6 +88,11 @@ n = ast.var("n", sort=ast.NATURAL)
 eventual = lc.prove(
     ast.eventually(3 / n**2 <= Fraction(1, 1000), variable=n)
 )
+
+# Prove that one—and only one—root lies in the supplied interval.
+unique = lc.prove(ast.unique_root(x, variable=x, within=(-1, 1)))
+if isinstance(unique, lc.VerifiedUniqueRoot):
+    unique.export_lean_project("verified-unique-root")
 ```
 
 ## Neural Network Verification
