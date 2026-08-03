@@ -5,6 +5,7 @@ import threading
 from types import SimpleNamespace
 
 import pytest
+from lean_runtime import EnvironmentError as RuntimeEnvironmentError
 
 import leancert.client as client_module
 from leancert.client import LeanClient
@@ -88,15 +89,15 @@ def test_environment_resolution_is_lazy():
         def __init__(self):
             self.calls = []
 
-        def ensure_references(self, references):
-            self.calls.append(references)
+        def ensure_references(self, references, *, timeout):
+            self.calls.append((references, timeout))
             return SimpleNamespace(id="environment_test")
 
     runtime = FakeRuntime()
-    client = LeanClient(package_ref="github:a/b@v1", runtime=runtime)
+    client = LeanClient(package_ref="github:a/b@v1", runtime=runtime, artifact_command=())
     assert runtime.calls == []
     assert client.environment_id == "environment_test"
-    assert runtime.calls == [["github:a/b@v1"]]
+    assert runtime.calls == [(["github:a/b@v1"], 3600.0)]
 
 
 def test_default_clients_share_one_resolved_environment(monkeypatch):
@@ -104,18 +105,103 @@ def test_default_clients_share_one_resolved_environment(monkeypatch):
         def __init__(self):
             self.calls = []
 
-        def ensure_references(self, references):
-            self.calls.append(references)
+        def ensure_references(self, references, *, timeout):
+            self.calls.append((references, timeout))
             return SimpleNamespace(id="environment_shared")
 
     runtime = FakeRuntime()
     monkeypatch.setattr(client_module, "_DEFAULT_RUNTIME", runtime)
     monkeypatch.setattr(client_module, "_DEFAULT_ENVIRONMENTS", {})
-    first = LeanClient(package_ref="github:a/b@" + "a" * 40)
-    second = LeanClient(package_ref="github:a/b@" + "a" * 40)
+    first = LeanClient(package_ref="github:a/b@" + "a" * 40, artifact_command=())
+    second = LeanClient(package_ref="github:a/b@" + "a" * 40, artifact_command=())
 
     assert first.environment is second.environment
-    assert runtime.calls == [["github:a/b@" + "a" * 40]]
+    assert runtime.calls == [(["github:a/b@" + "a" * 40], 3600.0)]
+
+
+def test_environment_resolution_timeout_is_configurable():
+    class FakeRuntime:
+        def __init__(self):
+            self.timeout = None
+
+        def ensure_references(self, references, *, timeout):
+            assert references == ["github:a/b@v1"]
+            self.timeout = timeout
+            return SimpleNamespace(id="environment_test")
+
+    runtime = FakeRuntime()
+    client = LeanClient(
+        package_ref="github:a/b@v1",
+        runtime=runtime,
+        resolution_timeout_seconds=7200,
+        artifact_command=(),
+    )
+    assert client.environment_id == "environment_test"
+    assert runtime.timeout == 7200.0
+
+
+@pytest.mark.parametrize("timeout", [0, -1, float("inf"), True])
+def test_environment_resolution_timeout_must_be_positive_and_finite(timeout):
+    with pytest.raises(ValueError, match="finite positive"):
+        LeanClient(resolution_timeout_seconds=timeout)
+
+
+def test_artifact_hydration_is_part_of_the_managed_environment_lock():
+    from dataclasses import dataclass
+
+    @dataclass(frozen=True)
+    class Package:
+        artifact_command: tuple[str, ...] = ()
+
+    @dataclass(frozen=True)
+    class Spec:
+        packages: tuple[Package, ...]
+
+    class FakeRuntime:
+        def __init__(self):
+            self.resolved = None
+
+        def open(self, identifier):
+            raise RuntimeEnvironmentError(f"unknown environment: {identifier}")
+
+        def spec_from_references(self, references):
+            assert references == ["github:a/b@v1"]
+            return Spec((Package(),))
+
+        def resolve(self, spec, *, timeout):
+            self.resolved = (spec, timeout)
+            return "locked"
+
+        def ensure(self, lock, *, name):
+            assert lock == "locked"
+            assert name.startswith("leancert-")
+            return SimpleNamespace(id="environment_hydrated")
+
+    runtime = FakeRuntime()
+    client = LeanClient(package_ref="github:a/b@v1", runtime=runtime)
+    assert client.environment_id == "environment_hydrated"
+    spec, timeout = runtime.resolved
+    assert spec.packages[0].artifact_command == (
+        "lake",
+        "exe",
+        "@LeanCertBridge/lean_bridge_runtime_prepare",
+    )
+    assert timeout == 3600.0
+
+
+def test_named_managed_environment_reopens_without_resolution():
+    environment = SimpleNamespace(id="environment_cached")
+
+    class FakeRuntime:
+        def open(self, identifier):
+            assert identifier.startswith("leancert-")
+            return environment
+
+        def spec_from_references(self, references):
+            raise AssertionError("a named cache hit must not resolve references")
+
+    client = LeanClient(package_ref="github:a/b@v1", runtime=FakeRuntime())
+    assert client.environment is environment
 
 
 def test_injected_environment_starts_managed_session():

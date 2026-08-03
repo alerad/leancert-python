@@ -10,9 +10,12 @@ It should not be used directly by end users - use the Solver class instead.
 
 from __future__ import annotations
 
+import hashlib
 import json
+import math
 import threading
 from collections.abc import Mapping, Sequence
+from dataclasses import replace
 from fractions import Fraction
 from pathlib import Path
 from typing import Any
@@ -24,6 +27,7 @@ from lean_runtime import (
     InteractiveSession,
     Runtime,
 )
+from lean_runtime import EnvironmentError as RuntimeEnvironmentError
 
 from .domain import Interval
 from .enclosures import EnclosureEnvironment, EnclosureProfile
@@ -44,12 +48,17 @@ def _bridge_core_expression(value: dict[str, Any]) -> dict[str, Any]:
 
 
 DEFAULT_BRIDGE_PACKAGE_REF = (
-    "github:alerad/leancert-bridge@2e7ca6faff2034ae36a4c0d7e5278a42ef496c90"
+    "github:alerad/leancert-bridge@0ff90d2dc822d7108fecbf45b1c529135ada978b"
 )
 DEFAULT_BRIDGE_COMMAND = ("lake", "exe", "@LeanCertBridge/lean_bridge")
+DEFAULT_ARTIFACT_COMMAND = (
+    "lake",
+    "exe",
+    "@LeanCertBridge/lean_bridge_runtime_prepare",
+)
 
 _DEFAULT_RUNTIME = Runtime()
-_DEFAULT_ENVIRONMENTS: dict[str, Environment] = {}
+_DEFAULT_ENVIRONMENTS: dict[tuple[str, tuple[str, ...]], Environment] = {}
 _DEFAULT_ENVIRONMENTS_LOCK = threading.Lock()
 
 
@@ -76,6 +85,8 @@ class LeanClient:
         runtime: Runtime | None = None,
         environment: Environment | None = None,
         execution_policy: ExecutionPolicy | None = None,
+        resolution_timeout_seconds: float = 3600,
+        artifact_command: Sequence[str] = DEFAULT_ARTIFACT_COMMAND,
         command: Sequence[str] = DEFAULT_BRIDGE_COMMAND,
         enclosure_profile: str | Path | EnclosureProfile | None = None,
     ):
@@ -88,12 +99,27 @@ class LeanClient:
             environment: Optional pre-built environment. This is the extension
                 point for downstream profiled Bridge executables.
             execution_policy: Resource policy for the interactive Bridge session.
+            resolution_timeout_seconds: Maximum time allowed for first-use Lake
+                dependency resolution. Cold Mathlib clones can exceed the
+                runtime's shorter general-purpose default on slow networks.
+            artifact_command: Managed hydration command retained in the exact
+                environment lock and run before the environment build. Pass an
+                empty sequence for a Bridge package without external artifacts.
             command: Command to start inside the managed environment.
         """
         if not package_ref:
             raise ValueError("package_ref must not be empty")
         if not command or any(not isinstance(part, str) or not part for part in command):
             raise ValueError("command must contain non-empty strings")
+        if any(not isinstance(part, str) or not part for part in artifact_command):
+            raise ValueError("artifact_command must contain non-empty strings")
+        if (
+            isinstance(resolution_timeout_seconds, bool)
+            or not isinstance(resolution_timeout_seconds, (int, float))
+            or not math.isfinite(resolution_timeout_seconds)
+            or resolution_timeout_seconds <= 0
+        ):
+            raise ValueError("resolution_timeout_seconds must be a finite positive number")
         self.package_ref = package_ref
         self.runtime = runtime or _DEFAULT_RUNTIME
         self._uses_default_runtime = runtime is None and environment is None
@@ -102,6 +128,8 @@ class LeanClient:
             timeout_seconds=3600,
             max_output_bytes=10_000_000,
         )
+        self.resolution_timeout_seconds = float(resolution_timeout_seconds)
+        self.artifact_command = tuple(artifact_command)
         self.command = tuple(command)
         self.enclosure_profile = (
             enclosure_profile
@@ -125,13 +153,45 @@ class LeanClient:
         if self._environment is None:
             if self._uses_default_runtime:
                 with _DEFAULT_ENVIRONMENTS_LOCK:
-                    self._environment = _DEFAULT_ENVIRONMENTS.get(self.package_ref)
+                    cache_key = (self.package_ref, self.artifact_command)
+                    self._environment = _DEFAULT_ENVIRONMENTS.get(cache_key)
                     if self._environment is None:
-                        self._environment = self.runtime.ensure_references([self.package_ref])
-                        _DEFAULT_ENVIRONMENTS[self.package_ref] = self._environment
+                        self._environment = self._resolve_environment()
+                        _DEFAULT_ENVIRONMENTS[cache_key] = self._environment
             else:
-                self._environment = self.runtime.ensure_references([self.package_ref])
+                self._environment = self._resolve_environment()
         return self._environment
+
+    def _resolve_environment(self) -> Environment:
+        """Resolve and materialize the exact Bridge environment once."""
+        if not self.artifact_command:
+            return self.runtime.ensure_references(
+                [self.package_ref], timeout=self.resolution_timeout_seconds
+            )
+        alias_material = json.dumps(
+            {
+                "package_ref": self.package_ref,
+                "artifact_command": self.artifact_command,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        alias = "leancert-" + hashlib.sha256(alias_material).hexdigest()[:32]
+        try:
+            return self.runtime.open(alias)
+        except RuntimeEnvironmentError as exc:
+            if not (
+                str(exc).startswith("unknown environment:")
+                or "environment alias is dangling" in str(exc)
+            ):
+                raise
+        spec = self.runtime.spec_from_references([self.package_ref])
+        if len(spec.packages) != 1:
+            raise BridgeError("one Bridge package reference must resolve to one direct package")
+        package = replace(spec.packages[0], artifact_command=self.artifact_command)
+        hydrated_spec = replace(spec, packages=(package,))
+        lock = self.runtime.resolve(hydrated_spec, timeout=self.resolution_timeout_seconds)
+        return self.runtime.ensure(lock, name=alias)
 
     @property
     def environment_id(self) -> str:
