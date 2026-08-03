@@ -350,6 +350,73 @@ class UnsupportedSystemRoot(SystemRootResult):
 
 
 @dataclass(frozen=True)
+class ReplayableScalarRootCertificate:
+    schema_version: str
+    payload_schema: str
+    checker: str
+    verifier: str
+    verification_route: str
+    payload_digest: str
+    expression: Mapping[str, Any]
+    interval: Interval
+    claim: Literal["exists", "unique", "excluded"]
+    taylor_depth: int
+    canonical_payload: Mapping[str, Any]
+
+
+@dataclass(frozen=True)
+class ScalarRootResult(ProofResult):
+    expression: Any
+    variable: Any
+    domain: Any
+    requested_claim: Literal["exists", "unique", "excluded"]
+    provenance: BridgeProvenance
+    original_claim: Any | None = field(default=None, kw_only=True)
+    normalized_claim: Any | None = field(default=None, kw_only=True)
+    claim_id: Any | None = field(default=None, kw_only=True)
+
+
+@dataclass(frozen=True)
+class VerifiedRootExistence(ScalarRootResult):
+    certificate: ReplayableScalarRootCertificate
+
+    def export_lean_project(self, path: str, *, verify: bool = True):
+        from .export import export_verified_scalar_root
+
+        return export_verified_scalar_root(self, path, verify=verify)
+
+
+@dataclass(frozen=True)
+class VerifiedUniqueRoot(ScalarRootResult):
+    certificate: ReplayableScalarRootCertificate
+
+    def export_lean_project(self, path: str, *, verify: bool = True):
+        from .export import export_verified_scalar_root
+
+        return export_verified_scalar_root(self, path, verify=verify)
+
+
+@dataclass(frozen=True)
+class VerifiedRootExclusion(ScalarRootResult):
+    certificate: ReplayableScalarRootCertificate
+
+    def export_lean_project(self, path: str, *, verify: bool = True):
+        from .export import export_verified_scalar_root
+
+        return export_verified_scalar_root(self, path, verify=verify)
+
+
+@dataclass(frozen=True)
+class ScalarRootCandidateRejected(ScalarRootResult):
+    reason: str
+
+
+@dataclass(frozen=True)
+class UnsupportedScalarRoot(ScalarRootResult):
+    reason: str
+
+
+@dataclass(frozen=True)
 class EventualSearchEvidence:
     source: Literal["automatic", "provided"]
     checks: int | None = None

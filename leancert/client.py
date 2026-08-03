@@ -760,6 +760,48 @@ class LeanClient:
                 )
         return response
 
+    def check_scalar_root(
+        self,
+        expr_json: dict[str, Any],
+        interval_json: dict[str, Any],
+        claim: str,
+        *,
+        taylor_depth: int = 10,
+    ) -> dict[str, Any]:
+        """Check a fixed scalar-root claim through Bridge Contract 2.5."""
+        if claim not in {"exists", "unique", "excluded"}:
+            raise ValueError("scalar-root claim must be exists, unique, or excluded")
+        request = {
+            "expr": expr_json,
+            "interval": interval_json,
+            "claim": claim,
+            "taylorDepth": taylor_depth,
+        }
+        response = self.call("check_scalar_root", request)
+        outcome = self.bridge_contract.parse_scalar_root_outcome(
+            response, expected_claim=claim
+        )
+        if outcome.certificate is not None:
+            payload = outcome.certificate.payload
+            expected_expression = _bridge_core_expression(expr_json)
+            if dict(payload.expression) != expected_expression:
+                raise ProtocolViolation(
+                    "scalar-root certificate expression contradicts the checked request"
+                )
+            expected_interval = (
+                Fraction(interval_json["lo"]["n"], interval_json["lo"]["d"]),
+                Fraction(interval_json["hi"]["n"], interval_json["hi"]["d"]),
+            )
+            actual_interval = (
+                payload.interval.lower.fraction,
+                payload.interval.upper.fraction,
+            )
+            if actual_interval != expected_interval or payload.taylor_depth != taylor_depth:
+                raise ProtocolViolation(
+                    "scalar-root certificate interval or Taylor depth contradicts the request"
+                )
+        return response
+
     def forward_interval(
         self,
         layers_json: list[dict],

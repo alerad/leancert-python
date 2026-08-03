@@ -26,10 +26,14 @@ from .result import (
     ReplayableBoundCertificate,
     ReplayableEventualCertificate,
     ReplayableKrawczykCertificate,
+    ReplayableScalarRootCertificate,
     Verified,
     VerifiedConjunction,
     VerifiedEventualBound,
+    VerifiedRootExclusion,
+    VerifiedRootExistence,
     VerifiedSystemRoot,
+    VerifiedUniqueRoot,
 )
 from .verification import write_export_manifest
 
@@ -84,6 +88,68 @@ def _support_proof(node: Any) -> str:
     if kind in {"neg", "sin", "cos", "exp"}:
         return f"(ADSupported.{kind} {_support_proof(node['e'])})"
     raise ValueError(f"core expression kind {kind!r} has no global-support proof")
+
+
+def _core_support_proof(node: Any) -> str:
+    kind = node["kind"]
+    if kind == "const":
+        value = Fraction(node["val"]["n"], node["val"]["d"])
+        return f"(ExprSupportedCore.const {_rat(value)})"
+    if kind == "var":
+        return f"(ExprSupportedCore.var {node['idx']})"
+    if kind in {"add", "mul"}:
+        return (
+            f"(ExprSupportedCore.{kind} {_core_support_proof(node['e1'])} "
+            f"{_core_support_proof(node['e2'])})"
+        )
+    if kind in {
+        "neg", "sin", "cos", "exp", "log", "sqrt", "sinh", "cosh", "tanh", "erf"
+    }:
+        return f"(ExprSupportedCore.{kind} {_core_support_proof(node['e'])})"
+    if kind == "named_const":
+        name = "pi" if node["name"] == "pi" else "eulerMascheroni"
+        return f"(ExprSupportedCore.namedConst .{name})"
+    raise ValueError(f"core expression kind {kind!r} has no core-support proof")
+
+
+def _continuous_support_proof(node: Any) -> str:
+    kind = node["kind"]
+    if kind == "const":
+        value = Fraction(node["val"]["n"], node["val"]["d"])
+        return f"(LeanCert.Meta.ExprContinuousCore.const {_rat(value)})"
+    if kind == "var":
+        return f"(LeanCert.Meta.ExprContinuousCore.var {node['idx']})"
+    if kind in {"add", "mul"}:
+        return (
+            f"(LeanCert.Meta.ExprContinuousCore.{kind} "
+            f"{_continuous_support_proof(node['e1'])} "
+            f"{_continuous_support_proof(node['e2'])})"
+        )
+    if kind in {"neg", "sin", "cos", "exp"}:
+        return f"(LeanCert.Meta.ExprContinuousCore.{kind} {_continuous_support_proof(node['e'])})"
+    raise ValueError(f"core expression kind {kind!r} has no global-continuity proof")
+
+
+def _uses_only_var0_proof(node: Any) -> str:
+    kind = node["kind"]
+    if kind == "const":
+        value = Fraction(node["val"]["n"], node["val"]["d"])
+        return f"(UsesOnlyVar0.const {_rat(value)})"
+    if kind == "var":
+        if node["idx"] != 0:
+            raise ValueError("scalar-root expression references a variable other than var 0")
+        return "UsesOnlyVar0.var0"
+    if kind in {"add", "mul"}:
+        return (
+            f"(UsesOnlyVar0.{kind} {_core_expression(node['e1'])} {_core_expression(node['e2'])} "
+            f"{_uses_only_var0_proof(node['e1'])} {_uses_only_var0_proof(node['e2'])})"
+        )
+    if kind in {"neg", "sin", "cos", "exp"}:
+        return (
+            f"(UsesOnlyVar0.{kind} {_core_expression(node['e'])} "
+            f"{_uses_only_var0_proof(node['e'])})"
+        )
+    raise ValueError(f"core expression kind {kind!r} has no scalar-variable proof")
 
 
 def _interval(value: Any) -> str:
@@ -789,6 +855,228 @@ def export_verified_eventual_bound(
         (staging / "README.md").write_text(
             "# LeanCert exported eventual bound\n\n"
             "This project replays a fixed reciprocal-power cutoff certificate.\n\n"
+            "```bash\nlake update\nlake build\n```\n",
+            encoding="utf-8",
+        )
+        write_export_manifest(
+            staging,
+            claim_id=artifact.claim_id,
+            certificate_digests=artifact.certificate_digests,
+        )
+        if verify:
+            lake = shutil.which("lake")
+            if lake is None:
+                return ExportDependencyUnavailable("lake is not available on PATH")
+            try:
+                process = subprocess.run(
+                    [lake, "build", "LeanCertExport"],
+                    cwd=staging,
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    timeout=900,
+                    check=False,
+                )
+            except subprocess.TimeoutExpired as exc:
+                output_text = exc.stdout or ""
+                if isinstance(output_text, bytes):
+                    output_text = output_text.decode(errors="replace")
+                return ExportResourceLimit(
+                    artifact, "kernel replay exceeded the export time limit", 900, output_text
+                )
+            if process.returncode != 0:
+                return ExportVerificationMismatch(
+                    artifact, "exported project did not kernel-check", process.stdout
+                )
+        staging.rename(output)
+        staging = output
+        if not verify:
+            return ExportPrepared(artifact)
+        return ExportVerified(artifact, "kernel", process.stdout)
+    finally:
+        if staging != output and staging.exists():
+            shutil.rmtree(staging)
+
+
+def _render_scalar_root_project(certificate: ReplayableScalarRootCertificate) -> str:
+    expression = _core_expression(certificate.expression)
+    interval = _interval(certificate.interval)
+    expected = {
+        "exists": (
+            "LeanCert.Validity.RootFinding.checkSignChange",
+            "LeanCert.Validity.RootFinding.verify_sign_change",
+        ),
+        "unique": (
+            "LeanCert.Validity.RootFinding.checkNewtonContractsCore",
+            "LeanCert.Validity.RootFinding.verify_unique_root_computable",
+        ),
+        "excluded": (
+            "LeanCert.Validity.RootFinding.checkNoRoot",
+            "LeanCert.Validity.RootFinding.verify_no_root",
+        ),
+    }[certificate.claim]
+    if (certificate.checker, certificate.verifier) != expected:
+        raise ValueError("certificate authority is not the supported scalar-root boundary")
+    lines = [
+        "import LeanCert.Validity.Bounds",
+        "import LeanCert.Meta.ProveContinuous",
+        "import LeanCert.Tactic.Verification",
+        "",
+        "open LeanCert.Core LeanCert.Engine LeanCert.Validity LeanCert.Validity.RootFinding",
+        "",
+        "namespace LeanCertExport",
+        "",
+        f"def expression : Expr := {expression}",
+        f"def interval : IntervalRat := {interval}",
+        "def config : EvalConfig := {",
+        f"  taylorDepth := {certificate.taylor_depth}",
+        "}",
+        "",
+    ]
+    if certificate.claim == "excluded":
+        lines.extend(
+            [
+                "theorem expression_supported : ExprSupportedCore expression := by",
+                "  unfold expression",
+                f"  exact {_core_support_proof(certificate.expression)}",
+                "",
+                "theorem certificate_check :",
+                "    checkNoRoot expression interval config = true := by",
+                "  decide +kernel",
+                "",
+                "theorem exported_claim :",
+                "    ∀ x ∈ interval, Expr.eval (fun _ => x) expression ≠ 0 :=",
+                "  verify_no_root expression expression_supported interval config certificate_check",
+            ]
+        )
+    else:
+        lines.extend(
+            [
+                "theorem expression_supported : ADSupported expression := by",
+                "  unfold expression",
+                f"  exact {_support_proof(certificate.expression)}",
+                "",
+                "theorem expression_continuous :",
+                "    ContinuousOn (fun x => Expr.eval (fun _ => x) expression)",
+                "      (Set.Icc interval.lo interval.hi) := by",
+                "  apply LeanCert.Meta.exprContinuousCore_continuousOn_interval",
+                "  unfold expression",
+                f"  exact {_continuous_support_proof(certificate.expression)}",
+                "",
+            ]
+        )
+        if certificate.claim == "unique":
+            lines.extend(
+                [
+                    "theorem expression_uses_only_var0 : UsesOnlyVar0 expression := by",
+                    "  unfold expression",
+                    f"  exact {_uses_only_var0_proof(certificate.expression)}",
+                    "",
+                    "theorem certificate_check :",
+                    "    checkNewtonContractsCore expression interval config = true := by",
+                    "  decide +kernel",
+                    "",
+                    "theorem exported_claim :",
+                    "    ∃! x, x ∈ interval ∧ Expr.eval (fun _ => x) expression = 0 :=",
+                    "  verify_unique_root_computable expression expression_supported",
+                    "    expression_uses_only_var0 interval config expression_continuous certificate_check",
+                ]
+            )
+        else:
+            lines.extend(
+                [
+                    "theorem certificate_check :",
+                    "    checkSignChange expression interval config = true := by",
+                    "  decide +kernel",
+                    "",
+                    "theorem exported_claim :",
+                    "    ∃ x ∈ interval, Expr.eval (fun _ => x) expression = 0 :=",
+                    "  verify_sign_change expression expression_supported.toCore interval config",
+                    "    expression_continuous certificate_check",
+                ]
+            )
+    lines.extend(["", "#assert_trust kernel exported_claim", "", "end LeanCertExport", ""])
+    return "\n".join(lines)
+
+
+def export_verified_scalar_root(
+    result: VerifiedRootExistence | VerifiedUniqueRoot | VerifiedRootExclusion,
+    path: str,
+    *,
+    verify: bool = True,
+):
+    """Create a standalone fixed scalar-root project and optionally kernel-check it."""
+    certificate = result.certificate
+    provenance = result.provenance
+    if not all(
+        (
+            provenance.lean_toolchain,
+            provenance.leancert_source,
+            provenance.leancert_resolved_revision,
+        )
+    ):
+        return ExportUnsupported("bridge provenance lacks dependency identities")
+    if provenance.leancert_source != "https://github.com/alerad/leancert.git":
+        return ExportUnsupported("export requires the canonical LeanCert repository")
+    assert provenance.leancert_resolved_revision is not None
+    assert provenance.lean_toolchain is not None
+    if re.fullmatch(r"[0-9a-f]{40}", provenance.leancert_resolved_revision) is None:
+        return ExportUnsupported("LeanCert dependency is not pinned to a full Git revision")
+    try:
+        lean_source = _render_scalar_root_project(certificate)
+    except ValueError as exc:
+        return ExportUnsupported(str(exc))
+
+    output = Path(path).expanduser().resolve()
+    if output.exists():
+        raise FileExistsError(f"export destination already exists: {output}")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    artifact = LeanProjectArtifact(str(output), str(result.claim_id), (certificate.payload_digest,))
+    lakefile = (
+        'name = "LeanCertExport"\n'
+        'version = "0.1.0"\n\n'
+        'defaultTargets = ["LeanCertExport"]\n\n'
+        "[[require]]\n"
+        'name = "leancert"\n'
+        f'git = "{provenance.leancert_source}"\n'
+        f'rev = "{provenance.leancert_resolved_revision}"\n\n'
+        "[[lean_lib]]\n"
+        'name = "LeanCertExport"\n'
+    )
+    staging = Path(tempfile.mkdtemp(prefix=f".{output.name}.", dir=str(output.parent))).resolve()
+    try:
+        (staging / "lean-toolchain").write_text(f"{provenance.lean_toolchain}\n", encoding="utf-8")
+        (staging / "lakefile.toml").write_text(lakefile, encoding="utf-8")
+        (staging / "LeanCertExport.lean").write_text(lean_source, encoding="utf-8")
+        (staging / "claim.json").write_text(
+            json.dumps(ast.encode_canonical(result.normalized_claim), indent=2, sort_keys=True)
+            + "\n",
+            encoding="utf-8",
+        )
+        (staging / "certificate.json").write_text(
+            json.dumps(
+                {
+                    "claim_id": str(result.claim_id),
+                    "schema_version": certificate.schema_version,
+                    "payload_digest": certificate.payload_digest,
+                    "checker": certificate.checker,
+                    "verifier": certificate.verifier,
+                    "verification_route": certificate.verification_route,
+                    "payload": _jsonable(certificate.canonical_payload),
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        (staging / "provenance.json").write_text(
+            json.dumps(_jsonable(asdict(provenance)), indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        (staging / "README.md").write_text(
+            "# LeanCert exported scalar-root proof\n\n"
+            f"This project replays a fixed `{certificate.claim}` scalar-root certificate.\n\n"
             "```bash\nlake update\nlake build\n```\n",
             encoding="utf-8",
         )

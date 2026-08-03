@@ -57,6 +57,12 @@ not the discovery procedure. The project kernel-reduces
 `checkReciprocalPowerUpper`, applies `verify_reciprocal_power_upper`, and uses
 `#assert_trust kernel` on the theorem for the complete natural-number tail.
 
+Contract 2.5 scalar-root outcomes export the exact expression, rational
+interval, and Taylor depth accepted by `checkSignChange`,
+`checkNewtonContractsCore`, or `checkNoRoot`. The project reconstructs the
+required support, single-variable, and continuity witnesses, applies the
+matching Golden Theorem, and ends with `#assert_trust kernel exported_claim`.
+
 ## Verify exported projects
 
 Every new export contains an `artifact.json` manifest using schema
