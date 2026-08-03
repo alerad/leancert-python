@@ -21,6 +21,11 @@ bound, and global-optimization configuration retained by the bridge. It closes
 the Boolean checker with `decide +kernel`, applies the recorded Golden Theorem,
 and checks the resulting declaration with `#assert_trust kernel`.
 
+For a Contract 2.7 strict result, export replays the fixed checker at the
+retained interior bound and separately proves its exact rational margin to the
+requested target. It composes the two facts with `lt_of_le_of_lt` or
+`lt_of_lt_of_le`; `<` is never replayed as `≤`.
+
 For an expression comparison such as `sin(x) <= x`, the checker certifies the
 normalized bound `sin(x) - x <= 0`. The project additionally reconstructs both
 semantic operands and proves the original `sin(x) <= x` theorem in Lean; the

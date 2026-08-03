@@ -177,6 +177,24 @@ class IntegralConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class RegisteredEnclosureConfig:
+    """Effort controls accepted by Contract 2.8 registered enclosures."""
+
+    precision: int = -53
+    max_depth: int = 4
+
+    def __post_init__(self) -> None:
+        if isinstance(self.precision, bool) or not isinstance(self.precision, int):
+            raise TypeError("precision must be an integer")
+        if (
+            isinstance(self.max_depth, bool)
+            or not isinstance(self.max_depth, int)
+            or self.max_depth < 0
+        ):
+            raise ValueError("max_depth must be a non-negative integer")
+
+
+@dataclass(frozen=True, slots=True)
 class ProveConfig:
     """Effort controls for checked claim execution.
 
@@ -190,6 +208,9 @@ class ProveConfig:
     eventual: EventualConfig = field(default_factory=EventualConfig)
     integral: IntegralConfig = field(default_factory=IntegralConfig)
     refutation: RefutationConfig = field(default_factory=RefutationConfig)
+    registered_enclosure: RegisteredEnclosureConfig = field(
+        default_factory=RegisteredEnclosureConfig
+    )
 
     def __post_init__(self) -> None:
         if (
@@ -206,6 +227,8 @@ class ProveConfig:
             raise TypeError("integral must be an IntegralConfig")
         if not isinstance(self.refutation, RefutationConfig):
             raise TypeError("refutation must be a RefutationConfig")
+        if not isinstance(self.registered_enclosure, RegisteredEnclosureConfig):
+            raise TypeError("registered_enclosure must be a RegisteredEnclosureConfig")
 
 
 def prove(
@@ -399,6 +422,19 @@ def _prove_normalized(
         )
     plan, unsupported_reason = try_plan_bound_claim(normalized_claim)
     if plan is not None:
+        if ast.collect_external_functions(plan.expression):
+            from .operations.enclosures import execute_registered_enclosure_plan
+
+            return execute_registered_enclosure_plan(
+                plan,
+                original_claim=original_claim,
+                normalized_claim=normalized_claim,
+                claim_id=claim_id,
+                client=client,
+                precision=config.registered_enclosure.precision,
+                taylor_depth=config.taylor_depth,
+                max_depth=config.registered_enclosure.max_depth,
+            )
         return execute_bound_plan(
             plan,
             original_claim=original_claim,
@@ -433,6 +469,7 @@ __all__ = [
     "KrawczykCandidate",
     "ProveConfig",
     "RefutationConfig",
+    "RegisteredEnclosureConfig",
     "SystemRootConfig",
     "prove",
 ]

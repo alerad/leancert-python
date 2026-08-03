@@ -73,10 +73,25 @@ exact rational-polynomial equalities and fixed-partition lower or upper bounds.
 Partition discovery is untrusted; exact equality never falls back to a
 numerical enclosure.
 
+Contract 2.7 adds `check_strict_bound` and `strict-bound-check/1`. Its `lt`
+and `gt` outcomes retain both the requested target and a strictly interior
+exact rational bound. The SDK validates the relation, fixed-checker authority,
+request identity, and exact margin before accepting the evidence. The existing
+non-strict `check_bound` operation and schemas remain unchanged.
+
+Contract 2.8 adds `check_registered_enclosure` and
+`replay_registered_enclosure`. A Bridge process may load exactly one immutable
+downstream profile at startup. The handshake reports the profile identity and
+resolved rule inventory; Python rejects any mismatch with the local profile.
+Discovery returns the complete registered checker tree, while fixed replay
+disables candidate execution and consumes only retained rule inputs and
+outputs. These profile-dependent certificates support fixed replay in the same
+environment but are not labeled as standalone project exports.
+
 The certificate families are intentionally distinct: adaptive evidence may
 close checked subdivision leaves, while `bound-check/2` and
-`krawczyk-check/1`, `eventual-bound-check/1`, `scalar-root-check/1`, and
-`integral-check/1` support standalone project
+`strict-bound-check/1`, `krawczyk-check/1`, `eventual-bound-check/1`,
+`scalar-root-check/1`, and `integral-check/1` support standalone project
 export.
 
 Golden fixtures live under

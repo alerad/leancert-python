@@ -87,6 +87,7 @@ class BoundComparisonLowering:
         "constant_le_rhs",
         "subtract_rhs_le_zero",
     ]
+    strict: bool = False
 
 
 @dataclass(frozen=True)
@@ -133,6 +134,106 @@ class ReplayableBoundCertificate:
     direction: Literal["lower", "upper"]
     config: ReplayBoundConfig
     canonical_payload: Mapping[str, Any]
+
+
+@dataclass(frozen=True)
+class ReplayableStrictBoundCertificate:
+    """Exact interior bound and fixed checker input from Bridge Contract 2.7."""
+
+    schema_version: str
+    payload_schema: str
+    checker: str
+    verifier: str
+    verification_route: str
+    payload_digest: str
+    expression: Mapping[str, Any]
+    box: tuple[Interval, ...]
+    relation: Literal["lt", "gt"]
+    target_bound: Fraction
+    certified_bound: Fraction
+    config: ReplayBoundConfig
+    canonical_payload: Mapping[str, Any]
+
+    @property
+    def direction(self) -> Literal["lower", "upper"]:
+        return "upper" if self.relation == "lt" else "lower"
+
+    @property
+    def bound(self) -> Fraction:
+        return self.target_bound
+
+
+@dataclass(frozen=True)
+class ReplayableRegisteredEnclosureCertificate:
+    """Profile-bound fixed registered-enclosure replay input from Contract 2.8."""
+
+    schema_version: str
+    replay_payload_schema: str
+    payload_digest: str
+    profile_name: str
+    leancert_revision: str
+    environment_digest: str
+    claim: Mapping[str, Any]
+    retained: Mapping[str, Any]
+
+    @classmethod
+    def load(cls, path: str) -> ReplayableRegisteredEnclosureCertificate:
+        with open(path, encoding="utf-8") as stream:
+            payload = json.load(stream)
+        if not isinstance(payload, dict) or set(payload) != {"claim", "certificate"}:
+            raise ValueError("registered enclosure evidence must contain claim and certificate")
+        claim = payload["claim"]
+        retained = payload["certificate"]
+        if not isinstance(claim, dict) or not isinstance(retained, dict):
+            raise ValueError("registered enclosure claim and certificate must be JSON objects")
+        profile = retained.get("profile")
+        if not isinstance(profile, dict):
+            raise ValueError("registered enclosure certificate lacks profile identity")
+        if retained.get("schema") != "registered-enclosure-check/1":
+            raise ValueError("unsupported registered enclosure certificate schema")
+        if retained.get("replay_payload_schema") != "checked-registered-enclosure/1":
+            raise ValueError("unsupported registered enclosure replay payload schema")
+        for field_name in ("name", "leancert_revision", "environment_digest"):
+            if not isinstance(profile.get(field_name), str) or not profile[field_name]:
+                raise ValueError(f"registered enclosure profile {field_name} is missing")
+
+        def freeze(value):
+            from types import MappingProxyType
+
+            if isinstance(value, dict):
+                return MappingProxyType({key: freeze(item) for key, item in value.items()})
+            if isinstance(value, list):
+                return tuple(freeze(item) for item in value)
+            return value
+
+        canonical = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+        return cls(
+            str(retained.get("schema", "")),
+            str(retained.get("replay_payload_schema", "")),
+            "sha256:" + hashlib.sha256(canonical).hexdigest(),
+            str(profile.get("name", "")),
+            str(profile.get("leancert_revision", "")),
+            str(profile.get("environment_digest", "")),
+            freeze(claim),
+            freeze(retained),
+        )
+
+    def save(self, path: str) -> None:
+        def thaw(value):
+            if isinstance(value, Mapping):
+                return {key: thaw(item) for key, item in value.items()}
+            if isinstance(value, (tuple, list)):
+                return [thaw(item) for item in value]
+            return value
+
+        payload = {"claim": thaw(self.claim), "certificate": thaw(self.retained)}
+        with open(path, "w", encoding="utf-8") as stream:
+            json.dump(payload, stream, sort_keys=True, separators=(",", ":"))
+
+    def replay(self, client: Any) -> Mapping[str, Any]:
+        from .operations.enclosures import replay_registered_certificate
+
+        return replay_registered_certificate(self, client)
 
 
 @dataclass(frozen=True)
@@ -197,8 +298,14 @@ class BoundCheckEvidence:
     backend: Optional[str]
     taylor_depth: int
     certificate: Optional[Mapping[str, Any]] = None
-    replay_certificate: ReplayableBoundCertificate | None = None
+    replay_certificate: (
+        ReplayableBoundCertificate
+        | ReplayableStrictBoundCertificate
+        | ReplayableRegisteredEnclosureCertificate
+        | None
+    ) = None
     raw_response: Mapping[str, Any] = field(default_factory=dict)
+    strict: bool = False
 
 
 @dataclass(frozen=True)
@@ -253,6 +360,26 @@ class Verified(BoundCheck):
         from .export import export_verified_bound
 
         return export_verified_bound(self, path, verify=verify)
+
+
+@dataclass(frozen=True)
+class VerifiedRegisteredEnclosure(Verified):
+    """A downstream registered enclosure established by a fresh kernel proof."""
+
+    def replay(self, client: Any) -> tuple[Mapping[str, Any], ...]:
+        results = []
+        for check in self.checks:
+            certificate = check.replay_certificate
+            if not isinstance(certificate, ReplayableRegisteredEnclosureCertificate):
+                raise TypeError("result contains non-registered enclosure evidence")
+            results.append(certificate.replay(client))
+        return tuple(results)
+
+    def export_lean_project(self, path: str, *, verify: bool = True):
+        return ExportUnsupported(
+            "registered enclosure export requires packaging the downstream Lean modules; "
+            "use fixed Bridge replay in the same profiled environment"
+        )
 
 
 @dataclass(frozen=True)

@@ -164,6 +164,10 @@ class Solver:
         client: Optional[LeanClient] = None,
         auto_simplify: bool = True,
         auto_affine: bool = True,
+        *,
+        enclosure_profile=None,
+        project_dir=None,
+        binary_path=None,
     ):
         """
         Initialize the solver.
@@ -182,12 +186,28 @@ class Solver:
         self._owns_client = client is None
         self._auto_simplify = auto_simplify
         self._auto_affine = auto_affine
+        if client is not None and any(
+            value is not None for value in (enclosure_profile, project_dir, binary_path)
+        ):
+            raise ValueError(
+                "enclosure_profile, project_dir, and binary_path configure an owned client"
+            )
+        self._client_options = {
+            "binary_path": binary_path,
+            "enclosure_profile": enclosure_profile,
+            "project_dir": project_dir,
+        }
 
     def _ensure_client(self) -> LeanClient:
         """Ensure we have a client connection."""
         if self._client is None:
-            self._client = LeanClient()
+            self._client = LeanClient(**self._client_options)
         return self._client
+
+    @property
+    def enclosures(self):
+        """Registered function handles from this solver's frozen profile."""
+        return self._ensure_client().enclosures
 
     def close(self) -> None:
         """Close the solver and release resources."""
@@ -530,6 +550,13 @@ class Solver:
         from .proving import prove
 
         return prove(claim, where=where, config=config, client=self._ensure_client())
+
+    def replay(self, result):
+        """Replay profile-bound evidence without running candidate discovery."""
+        replay = getattr(result, "replay", None)
+        if replay is None:
+            raise TypeError("result does not expose fixed Bridge replay")
+        return replay(self._ensure_client())
 
     @staticmethod
     def _bridge_provenance(client: Any) -> BridgeProvenance:
