@@ -93,7 +93,10 @@ jobs:
           mkdir -p leancert/bin
           BASE_URL="https://github.com/${BRIDGE_REPO}/releases/download/${BRIDGE_TAG}"
           ASSET="lean_bridge-${{ matrix.platform }}-${{ matrix.arch }}"
-          curl -fL "${BASE_URL}/${ASSET}" -o leancert/bin/lean_bridge
+          # Tag creation and release-asset publication are separate GitHub
+          # events. Retry transient 404s while the Bridge matrix is finishing.
+          curl -fL --retry 30 --retry-delay 30 --retry-all-errors \
+            "${BASE_URL}/${ASSET}" -o leancert/bin/lean_bridge
           chmod +x leancert/bin/lean_bridge
           ls -la leancert/bin/
 
@@ -105,7 +108,17 @@ jobs:
           $baseUrl = "https://github.com/${env:BRIDGE_REPO}/releases/download/${env:BRIDGE_TAG}"
           $asset = 'lean_bridge-windows-x86_64.exe'
           $uri = "$baseUrl/$asset"
-          Invoke-WebRequest -Uri $uri -OutFile 'leancert\bin\lean_bridge.exe'
+          $output = 'leancert\bin\lean_bridge.exe'
+          for ($attempt = 1; $attempt -le 30; $attempt++) {
+            try {
+              Invoke-WebRequest -Uri $uri -OutFile $output -ErrorAction Stop
+              break
+            } catch {
+              if ($attempt -eq 30) { throw }
+              Write-Host "Bridge asset is not ready (attempt $attempt/30); retrying in 30 seconds"
+              Start-Sleep -Seconds 30
+            }
+          }
           Get-ChildItem leancert\bin
 
       - name: Install build tools
