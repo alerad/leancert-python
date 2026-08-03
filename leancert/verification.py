@@ -6,17 +6,26 @@ import hashlib
 import json
 import os
 import re
-import shutil
-import subprocess
 import time
 from dataclasses import dataclass
 from enum import IntEnum
 from pathlib import Path
 from typing import Any, Literal
 
+from lean_runtime import ExecutionPolicy, LeanRuntimeError, Runtime
+
 from . import ast
 from .exceptions import ProtocolViolation
-from .protocol import ReplayBoundPayload, ReplayEventualPayload, ReplayKrawczykPayload
+from .protocol import (
+    INTEGRAL_AUTHORITIES,
+    SCALAR_ROOT_AUTHORITIES,
+    ReplayBoundPayload,
+    ReplayEventualPayload,
+    ReplayIntegralPayload,
+    ReplayKrawczykPayload,
+    ReplayScalarRootPayload,
+    ReplayStrictBoundPayload,
+)
 
 EXPORT_SCHEMA_VERSION = "leancert-export/1"
 EXPORT_TARGET = "LeanCertExport"
@@ -39,6 +48,7 @@ SHA256_PATTERN = re.compile(r"sha256:[0-9a-f]{64}")
 CLAIM_ID_PATTERN = re.compile(r"lc-ast-v[0-9]+:sha256:[0-9a-f]{64}")
 TOOLCHAIN_PATTERN = re.compile(r"leanprover/lean4:v[0-9]+\.[0-9]+\.[0-9]+")
 REVISION_PATTERN = re.compile(r"[0-9a-f]{40}")
+ENVIRONMENT_ID_PATTERN = re.compile(r"env_[0-9a-f]{64}")
 
 
 class VerificationExitCode(IntEnum):
@@ -139,6 +149,7 @@ class _ValidatedArtifact:
     trust_class: str
     target: str
     certificate_digests: tuple[str, ...]
+    environment_id: str
 
 
 def _object_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -295,10 +306,16 @@ def _validate_certificate(certificate: Any, claim_id: str) -> tuple[str, ...]:
         try:
             if schema == "bound-check/2":
                 parsed_payload = ReplayBoundPayload.parse(payload)
+            elif schema == "strict-bound-check/1":
+                parsed_payload = ReplayStrictBoundPayload.parse(payload)
             elif schema == "krawczyk-check/1":
                 parsed_payload = ReplayKrawczykPayload.parse(payload)
             elif schema == "eventual-bound-check/1":
                 parsed_payload = ReplayEventualPayload.parse(payload)
+            elif schema == "scalar-root-check/1":
+                parsed_payload = ReplayScalarRootPayload.parse(payload)
+            elif schema == "integral-check/1":
+                parsed_payload = ReplayIntegralPayload.parse(payload)
             else:
                 raise ArtifactValidationError(f"unsupported certificate schema: {schema!r}")
         except ProtocolViolation as exc:
@@ -318,12 +335,32 @@ def _validate_certificate(certificate: Any, claim_id: str) -> tuple[str, ...]:
                 if direction == "upper"
                 else "LeanCert.Validity.GlobalOpt.verify_global_lower_bound"
             )
+        elif schema == "strict-bound-check/1":
+            assert isinstance(parsed_payload, ReplayStrictBoundPayload)
+            upper = parsed_payload.relation == "lt"
+            expected_checker = (
+                "LeanCert.Validity.GlobalOpt.checkGlobalUpperBound"
+                if upper
+                else "LeanCert.Validity.GlobalOpt.checkGlobalLowerBound"
+            )
+            expected_verifier = (
+                "LeanCert.Validity.GlobalOpt.verify_global_upper_bound"
+                if upper
+                else "LeanCert.Validity.GlobalOpt.verify_global_lower_bound"
+            )
         elif schema == "krawczyk-check/1":
             expected_checker = "LeanCert.Engine.krawczykCheck"
             expected_verifier = "LeanCert.Validity.verify_unique_system_root"
-        else:
+        elif schema == "eventual-bound-check/1":
             expected_checker = "LeanCert.Validity.checkReciprocalPowerUpper"
             expected_verifier = "LeanCert.Validity.verify_reciprocal_power_upper"
+        elif schema == "scalar-root-check/1":
+            assert isinstance(parsed_payload, ReplayScalarRootPayload)
+            expected_checker, expected_verifier = SCALAR_ROOT_AUTHORITIES[parsed_payload.claim]
+        else:
+            assert schema == "integral-check/1"
+            assert isinstance(parsed_payload, ReplayIntegralPayload)
+            expected_checker, expected_verifier = INTEGRAL_AUTHORITIES[parsed_payload.relation]
         if entry["checker"] != expected_checker or entry["verifier"] != expected_verifier:
             raise ArtifactValidationError("certificate authority does not match its schema")
         digests.append(digest)
@@ -395,12 +432,18 @@ def _validate_project(path: Path, required_trust: str | None) -> _ValidatedArtif
     toolchain = provenance.get("lean_toolchain")
     source = provenance.get("leancert_source")
     revision = provenance.get("leancert_resolved_revision")
+    environment_id = provenance.get("environment_id")
     if not isinstance(toolchain, str) or TOOLCHAIN_PATTERN.fullmatch(toolchain) is None:
         raise ArtifactValidationError("provenance does not pin a released Lean toolchain")
     if source != "https://github.com/alerad/leancert.git":
         raise ArtifactValidationError("provenance does not use the canonical LeanCert source")
     if not isinstance(revision, str) or REVISION_PATTERN.fullmatch(revision) is None:
         raise ArtifactValidationError("provenance does not pin a full LeanCert revision")
+    if (
+        not isinstance(environment_id, str)
+        or ENVIRONMENT_ID_PATTERN.fullmatch(environment_id) is None
+    ):
+        raise ArtifactValidationError("provenance does not pin a lean-runtime environment")
     if _read_text(path / "lean-toolchain").strip() != toolchain:
         raise ArtifactValidationError("lean-toolchain disagrees with provenance")
     lakefile = _read_text(path / "lakefile.toml")
@@ -411,18 +454,25 @@ def _validate_project(path: Path, required_trust: str | None) -> _ValidatedArtif
         raise ArtifactValidationError("Lean source lacks a kernel trust assertion per certificate")
     if lean_source.count("decide +kernel") < len(certificate_digests):
         raise ArtifactValidationError("Lean source lacks fixed-certificate kernel reduction")
-    return _ValidatedArtifact(path, claim_id, trust_class, manifest["target"], certificate_digests)
+    return _ValidatedArtifact(
+        path,
+        claim_id,
+        trust_class,
+        manifest["target"],
+        certificate_digests,
+        environment_id,
+    )
 
 
 def verify_exported_projects(
     paths: list[str | os.PathLike[str]],
     *,
     require_trust: Literal["kernel"] | None = "kernel",
-    lake: str | os.PathLike[str] | None = None,
+    runtime: Runtime | None = None,
     timeout: float = 900,
     fail_fast: bool = False,
 ) -> VerificationReport:
-    """Validate and independently rebuild exported LeanCert projects."""
+    """Validate artifacts and kernel-check them in their exact managed environments."""
     started = time.monotonic()
     if not paths:
         paths = ["."]
@@ -450,15 +500,7 @@ def verify_exported_projects(
             time.monotonic() - started,
         )
 
-    if lake is None:
-        executable = shutil.which("lake")
-    else:
-        requested_lake = str(lake)
-        if os.sep in requested_lake or (os.altsep and os.altsep in requested_lake):
-            executable_path = Path(requested_lake).expanduser().resolve()
-            executable = str(executable_path) if executable_path.is_file() else None
-        else:
-            executable = shutil.which(requested_lake)
+    selected_runtime = runtime or Runtime()
 
     for project in projects:
         item_started = time.monotonic()
@@ -476,53 +518,22 @@ def verify_exported_projects(
             if fail_fast:
                 break
             continue
-        if executable is None:
-            results.append(
-                ArtifactVerification(
-                    str(project),
-                    "infrastructure_failure",
-                    "lake is not available on PATH",
-                    validated.claim_id,
-                    validated.trust_class,
-                    validated.certificate_digests,
-                    time.monotonic() - item_started,
-                )
-            )
-            if fail_fast:
-                break
-            continue
         try:
-            process = subprocess.run(
-                [executable, "build", validated.target],
-                cwd=project,
-                text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                timeout=timeout,
-                check=False,
+            environment = selected_runtime.open(validated.environment_id)
+            execution = environment.check_files(
+                {"LeanCertExport.lean": _read_text(project / "LeanCertExport.lean")},
+                entrypoint="LeanCertExport.lean",
+                policy=ExecutionPolicy(
+                    timeout_seconds=timeout,
+                    max_output_bytes=10_000_000,
+                ),
             )
-        except subprocess.TimeoutExpired as exc:
-            output = exc.stdout or ""
-            if isinstance(output, bytes):
-                output = output.decode(errors="replace")
-            results.append(
-                ArtifactVerification(
-                    str(project),
-                    "resource_limit",
-                    f"kernel rebuild exceeded {timeout:g} seconds",
-                    validated.claim_id,
-                    validated.trust_class,
-                    validated.certificate_digests,
-                    time.monotonic() - item_started,
-                    output,
-                )
-            )
-        except OSError as exc:
+        except LeanRuntimeError as exc:
             results.append(
                 ArtifactVerification(
                     str(project),
                     "infrastructure_failure",
-                    f"could not execute lake: {exc}",
+                    f"could not open or execute the managed environment: {exc}",
                     validated.claim_id,
                     validated.trust_class,
                     validated.certificate_digests,
@@ -530,12 +541,16 @@ def verify_exported_projects(
                 )
             )
         else:
-            status: ArtifactStatus = (
-                "verified" if process.returncode == 0 else "verification_failed"
-            )
-            message = (
-                "kernel checked" if process.returncode == 0 else "lake build rejected the artifact"
-            )
+            output = execution.stdout + execution.stderr
+            if execution.timed_out:
+                status: ArtifactStatus = "resource_limit"
+                message = f"kernel check exceeded {timeout:g} seconds"
+            elif execution.ok:
+                status = "verified"
+                message = "kernel checked in the originating managed environment"
+            else:
+                status = "verification_failed"
+                message = "managed kernel check rejected the artifact"
             results.append(
                 ArtifactVerification(
                     str(project),
@@ -544,8 +559,8 @@ def verify_exported_projects(
                     validated.claim_id,
                     validated.trust_class,
                     validated.certificate_digests,
-                    time.monotonic() - item_started,
-                    process.stdout,
+                    execution.elapsed_seconds,
+                    output,
                 )
             )
         if fail_fast and not results[-1].verified:

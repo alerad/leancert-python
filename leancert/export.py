@@ -5,12 +5,13 @@ from __future__ import annotations
 import json
 import re
 import shutil
-import subprocess
 import tempfile
 from dataclasses import asdict
 from fractions import Fraction
 from pathlib import Path
 from typing import Any
+
+from lean_runtime import ExecutionPolicy, LeanRuntimeError, Runtime
 
 from . import ast
 from .expression_codec import compile_semantic_expression, lower_bridge_expression
@@ -422,7 +423,51 @@ def _jsonable(value: Any) -> Any:
     return value
 
 
-def export_verified_bound(result: Verified, path: str, *, verify: bool = True):
+def _verify_in_managed_environment(
+    provenance,
+    lean_source: str,
+    artifact: LeanProjectArtifact,
+    *,
+    runtime: Runtime | None = None,
+):
+    """Kernel-check one generated source in the exact originating environment."""
+    if not provenance.environment_id:
+        return ExportUnsupported("proof provenance lacks a lean-runtime environment identity")
+    try:
+        environment = (runtime or Runtime()).open(provenance.environment_id)
+        result = environment.check_files(
+            {"LeanCertExport.lean": lean_source},
+            entrypoint="LeanCertExport.lean",
+            policy=ExecutionPolicy(timeout_seconds=900, max_output_bytes=10_000_000),
+        )
+    except LeanRuntimeError as exc:
+        return ExportDependencyUnavailable(
+            f"originating lean-runtime environment is unavailable: {exc}"
+        )
+    output = result.stdout + result.stderr
+    if result.timed_out:
+        return ExportResourceLimit(
+            artifact,
+            "kernel replay exceeded the export time limit",
+            900,
+            output,
+        )
+    if not result.ok:
+        return ExportVerificationMismatch(
+            artifact,
+            "exported source did not kernel-check",
+            output,
+        )
+    return output
+
+
+def export_verified_bound(
+    result: Verified,
+    path: str,
+    *,
+    verify: bool = True,
+    runtime: Runtime | None = None,
+):
     """Create a fixed-certificate project and optionally rebuild it in kernel mode."""
     certificates = tuple(check.replay_certificate for check in result.checks)
     if not certificates or any(item is None for item in certificates):
@@ -522,39 +567,19 @@ def export_verified_bound(result: Verified, path: str, *, verify: bool = True):
             claim_id=claim_id,
             certificate_digests=artifact.certificate_digests,
         )
+        verification_output = ""
         if verify:
-            lake = shutil.which("lake")
-            if lake is None:
-                return ExportDependencyUnavailable("lake is not available on PATH")
-            try:
-                process = subprocess.run(
-                    [lake, "build", "LeanCertExport"],
-                    cwd=staging,
-                    text=True,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    timeout=900,
-                    check=False,
-                )
-            except subprocess.TimeoutExpired as exc:
-                output_text = exc.stdout or ""
-                if isinstance(output_text, bytes):
-                    output_text = output_text.decode(errors="replace")
-                return ExportResourceLimit(
-                    artifact,
-                    "kernel replay exceeded the export time limit",
-                    900,
-                    output_text,
-                )
-            if process.returncode != 0:
-                return ExportVerificationMismatch(
-                    artifact, "exported project did not kernel-check", process.stdout
-                )
+            checked = _verify_in_managed_environment(
+                provenance, lean_source, artifact, runtime=runtime
+            )
+            if not isinstance(checked, str):
+                return checked
+            verification_output = checked
         staging.rename(output)
         staging = output
         if not verify:
             return ExportPrepared(artifact)
-        return ExportVerified(artifact, "kernel", process.stdout)
+        return ExportVerified(artifact, "kernel", verification_output)
     finally:
         if staging != output and staging.exists():
             shutil.rmtree(staging)
@@ -565,6 +590,7 @@ def export_verified_conjunction(
     path: str,
     *,
     verify: bool = True,
+    runtime: Runtime | None = None,
 ):
     """Export a homogeneous conjunction of replayable checked bound children."""
     if any(isinstance(child, NormalizedTrue) for child in result.children):
@@ -597,7 +623,7 @@ def export_verified_conjunction(
         normalized_claim=result.normalized_claim,
         claim_id=result.claim_id,
     )
-    return export_verified_bound(synthetic, path, verify=verify)
+    return export_verified_bound(synthetic, path, verify=verify, runtime=runtime)
 
 
 def _render_krawczyk_project(
@@ -670,7 +696,13 @@ def _render_krawczyk_project(
     )
 
 
-def export_verified_system_root(result: VerifiedSystemRoot, path: str, *, verify: bool = True):
+def export_verified_system_root(
+    result: VerifiedSystemRoot,
+    path: str,
+    *,
+    verify: bool = True,
+    runtime: Runtime | None = None,
+):
     """Create a standalone fixed Krawczyk project and optionally kernel-check it."""
     certificate = result.certificate
     provenance = result.provenance
@@ -754,36 +786,19 @@ def export_verified_system_root(result: VerifiedSystemRoot, path: str, *, verify
             claim_id=artifact.claim_id,
             certificate_digests=artifact.certificate_digests,
         )
+        verification_output = ""
         if verify:
-            lake = shutil.which("lake")
-            if lake is None:
-                return ExportDependencyUnavailable("lake is not available on PATH")
-            try:
-                process = subprocess.run(
-                    [lake, "build", "LeanCertExport"],
-                    cwd=staging,
-                    text=True,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    timeout=900,
-                    check=False,
-                )
-            except subprocess.TimeoutExpired as exc:
-                output_text = exc.stdout or ""
-                if isinstance(output_text, bytes):
-                    output_text = output_text.decode(errors="replace")
-                return ExportResourceLimit(
-                    artifact, "kernel replay exceeded the export time limit", 900, output_text
-                )
-            if process.returncode != 0:
-                return ExportVerificationMismatch(
-                    artifact, "exported project did not kernel-check", process.stdout
-                )
+            checked = _verify_in_managed_environment(
+                provenance, lean_source, artifact, runtime=runtime
+            )
+            if not isinstance(checked, str):
+                return checked
+            verification_output = checked
         staging.rename(output)
         staging = output
         if not verify:
             return ExportPrepared(artifact)
-        return ExportVerified(artifact, "kernel", process.stdout)
+        return ExportVerified(artifact, "kernel", verification_output)
     finally:
         if staging != output and staging.exists():
             shutil.rmtree(staging)
@@ -825,7 +840,11 @@ def _render_eventual_project(certificate: ReplayableEventualCertificate) -> str:
 
 
 def export_verified_eventual_bound(
-    result: VerifiedEventualBound, path: str, *, verify: bool = True
+    result: VerifiedEventualBound,
+    path: str,
+    *,
+    verify: bool = True,
+    runtime: Runtime | None = None,
 ):
     """Create a standalone fixed-cutoff project and optionally kernel-check it."""
     certificate = result.certificate
@@ -907,36 +926,19 @@ def export_verified_eventual_bound(
             claim_id=artifact.claim_id,
             certificate_digests=artifact.certificate_digests,
         )
+        verification_output = ""
         if verify:
-            lake = shutil.which("lake")
-            if lake is None:
-                return ExportDependencyUnavailable("lake is not available on PATH")
-            try:
-                process = subprocess.run(
-                    [lake, "build", "LeanCertExport"],
-                    cwd=staging,
-                    text=True,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    timeout=900,
-                    check=False,
-                )
-            except subprocess.TimeoutExpired as exc:
-                output_text = exc.stdout or ""
-                if isinstance(output_text, bytes):
-                    output_text = output_text.decode(errors="replace")
-                return ExportResourceLimit(
-                    artifact, "kernel replay exceeded the export time limit", 900, output_text
-                )
-            if process.returncode != 0:
-                return ExportVerificationMismatch(
-                    artifact, "exported project did not kernel-check", process.stdout
-                )
+            checked = _verify_in_managed_environment(
+                provenance, lean_source, artifact, runtime=runtime
+            )
+            if not isinstance(checked, str):
+                return checked
+            verification_output = checked
         staging.rename(output)
         staging = output
         if not verify:
             return ExportPrepared(artifact)
-        return ExportVerified(artifact, "kernel", process.stdout)
+        return ExportVerified(artifact, "kernel", verification_output)
     finally:
         if staging != output and staging.exists():
             shutil.rmtree(staging)
@@ -1048,6 +1050,7 @@ def export_verified_scalar_root(
     path: str,
     *,
     verify: bool = True,
+    runtime: Runtime | None = None,
 ):
     """Create a standalone fixed scalar-root project and optionally kernel-check it."""
     certificate = result.certificate
@@ -1129,36 +1132,19 @@ def export_verified_scalar_root(
             claim_id=artifact.claim_id,
             certificate_digests=artifact.certificate_digests,
         )
+        verification_output = ""
         if verify:
-            lake = shutil.which("lake")
-            if lake is None:
-                return ExportDependencyUnavailable("lake is not available on PATH")
-            try:
-                process = subprocess.run(
-                    [lake, "build", "LeanCertExport"],
-                    cwd=staging,
-                    text=True,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    timeout=900,
-                    check=False,
-                )
-            except subprocess.TimeoutExpired as exc:
-                output_text = exc.stdout or ""
-                if isinstance(output_text, bytes):
-                    output_text = output_text.decode(errors="replace")
-                return ExportResourceLimit(
-                    artifact, "kernel replay exceeded the export time limit", 900, output_text
-                )
-            if process.returncode != 0:
-                return ExportVerificationMismatch(
-                    artifact, "exported project did not kernel-check", process.stdout
-                )
+            checked = _verify_in_managed_environment(
+                provenance, lean_source, artifact, runtime=runtime
+            )
+            if not isinstance(checked, str):
+                return checked
+            verification_output = checked
         staging.rename(output)
         staging = output
         if not verify:
             return ExportPrepared(artifact)
-        return ExportVerified(artifact, "kernel", process.stdout)
+        return ExportVerified(artifact, "kernel", verification_output)
     finally:
         if staging != output and staging.exists():
             shutil.rmtree(staging)
@@ -1269,6 +1255,7 @@ def export_verified_integral(
     path: str,
     *,
     verify: bool = True,
+    runtime: Runtime | None = None,
 ):
     """Create a standalone fixed integral project and optionally kernel-check it."""
     certificate = result.certificate
@@ -1350,36 +1337,19 @@ def export_verified_integral(
             claim_id=artifact.claim_id,
             certificate_digests=artifact.certificate_digests,
         )
+        verification_output = ""
         if verify:
-            lake = shutil.which("lake")
-            if lake is None:
-                return ExportDependencyUnavailable("lake is not available on PATH")
-            try:
-                process = subprocess.run(
-                    [lake, "build", "LeanCertExport"],
-                    cwd=staging,
-                    text=True,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    timeout=900,
-                    check=False,
-                )
-            except subprocess.TimeoutExpired as exc:
-                output_text = exc.stdout or ""
-                if isinstance(output_text, bytes):
-                    output_text = output_text.decode(errors="replace")
-                return ExportResourceLimit(
-                    artifact, "kernel replay exceeded the export time limit", 900, output_text
-                )
-            if process.returncode != 0:
-                return ExportVerificationMismatch(
-                    artifact, "exported project did not kernel-check", process.stdout
-                )
+            checked = _verify_in_managed_environment(
+                provenance, lean_source, artifact, runtime=runtime
+            )
+            if not isinstance(checked, str):
+                return checked
+            verification_output = checked
         staging.rename(output)
         staging = output
         if not verify:
             return ExportPrepared(artifact)
-        return ExportVerified(artifact, "kernel", process.stdout)
+        return ExportVerified(artifact, "kernel", verification_output)
     finally:
         if staging != output and staging.exists():
             shutil.rmtree(staging)

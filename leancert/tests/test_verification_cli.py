@@ -3,16 +3,21 @@
 from __future__ import annotations
 
 import json
-import subprocess
+from fractions import Fraction
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
+from lean_runtime import EnvironmentError
 
 import leancert as lc
 from leancert import ast
 from leancert.cli import main
 from leancert.tests.test_eventual_bounds import FakeEventualClient, reciprocal_claim
 from leancert.tests.test_export import ReplayClient, response
+from leancert.tests.test_integral_claims import FakeIntegralClient, integral_expression
+from leancert.tests.test_scalar_roots import FakeScalarRootClient
+from leancert.tests.test_strict_bounds import StrictClient, strict_response
 from leancert.tests.test_system_roots import FakeSystemRootClient, coupled_claim
 
 
@@ -24,9 +29,36 @@ def exported_project(tmp_path: Path, name: str = "proof") -> Path:
     return tmp_path / name
 
 
-def successful_build(command, **kwargs):
-    assert command[-2:] == ["build", "LeanCertExport"]
-    return subprocess.CompletedProcess(command, 0, "kernel checked")
+def managed(client):
+    """Give protocol fakes the runtime identity required by exported artifacts."""
+    client.environment = SimpleNamespace(id="env_" + "a" * 64)
+    client.execution_id = "execution_" + "b" * 64
+    return client
+
+
+class FakeRuntime:
+    def __init__(self, *, ok=True, timed_out=False, output="kernel checked", missing=False):
+        self.ok = ok
+        self.timed_out = timed_out
+        self.output = output
+        self.missing = missing
+        self.checked = []
+
+    def open(self, environment_id):
+        if self.missing:
+            raise EnvironmentError("managed environment is absent")
+        assert environment_id == "env_" + "a" * 64
+        return self
+
+    def check_files(self, files, *, entrypoint, policy):
+        self.checked.append((files, entrypoint, policy))
+        return SimpleNamespace(
+            ok=self.ok,
+            timed_out=self.timed_out,
+            stdout=self.output,
+            stderr="",
+            elapsed_seconds=0.25,
+        )
 
 
 def test_export_writes_versioned_integrity_manifest(tmp_path):
@@ -46,11 +78,10 @@ def test_export_writes_versioned_integrity_manifest(tmp_path):
     assert all(value.startswith("sha256:") for value in manifest["files"].values())
 
 
-def test_verify_rebuilds_valid_artifact(tmp_path, monkeypatch):
+def test_verify_checks_valid_artifact_in_managed_environment(tmp_path):
     project = exported_project(tmp_path)
-    monkeypatch.setattr("leancert.verification.shutil.which", lambda name: "/tools/lake")
-    monkeypatch.setattr("leancert.verification.subprocess.run", successful_build)
-    report = lc.verify_exported_projects([project])
+    runtime = FakeRuntime()
+    report = lc.verify_exported_projects([project], runtime=runtime)
     assert report.verified
     assert report.exit_code == lc.VerificationExitCode.SUCCESS
     assert report.artifacts[0].trust_class == "kernel"
@@ -58,50 +89,59 @@ def test_verify_rebuilds_valid_artifact(tmp_path, monkeypatch):
         report.artifacts[0].claim_id
         == json.loads((project / "artifact.json").read_text(encoding="utf-8"))["claim_id"]
     )
+    assert runtime.checked[0][1] == "LeanCertExport.lean"
 
 
-@pytest.mark.parametrize("kind", ["system_root", "eventual"])
-def test_verifier_accepts_every_exported_certificate_family(tmp_path, monkeypatch, kind):
-    if kind == "system_root":
-        result = lc.prove(coupled_claim(), client=FakeSystemRootClient())
+@pytest.mark.parametrize(
+    "kind", ["strict_bound", "system_root", "scalar_root", "integral", "eventual"]
+)
+def test_verifier_accepts_every_exported_certificate_family(tmp_path, kind):
+    if kind == "strict_bound":
+        x = ast.var("x")
+        result = lc.prove(
+            x < 2,
+            where={x: (0, 1)},
+            client=managed(StrictClient((strict_response(),))),
+        )
+    elif kind == "system_root":
+        result = lc.prove(coupled_claim(), client=managed(FakeSystemRootClient()))
+    elif kind == "scalar_root":
+        x = ast.var("x")
+        result = lc.prove(
+            ast.unique_root(x, variable=x, within=(-1, 1)),
+            client=managed(FakeScalarRootClient()),
+        )
+    elif kind == "integral":
+        _, integral = integral_expression()
+        result = lc.prove(ast.eq(integral, Fraction(1, 3)), client=managed(FakeIntegralClient()))
     else:
-        result = lc.prove(reciprocal_claim(), client=FakeEventualClient())
+        result = lc.prove(reciprocal_claim(), client=managed(FakeEventualClient()))
     project = tmp_path / kind
     assert isinstance(result.export_lean_project(project, verify=False), lc.ExportPrepared)
-    monkeypatch.setattr("leancert.verification.shutil.which", lambda name: "/tools/lake")
-    monkeypatch.setattr("leancert.verification.subprocess.run", successful_build)
-    report = lc.verify_exported_projects([project])
+    report = lc.verify_exported_projects([project], runtime=FakeRuntime())
     assert report.verified, report.to_dict()
 
 
-def test_recursive_discovery_is_deterministic_and_skips_build_trees(tmp_path, monkeypatch):
+def test_recursive_discovery_is_deterministic_and_skips_build_trees(tmp_path):
     second = exported_project(tmp_path / "nested", "b")
     first = exported_project(tmp_path, "a")
     ignored = tmp_path / ".lake" / "hidden"
     ignored.mkdir(parents=True)
     (ignored / "artifact.json").write_text("{}", encoding="utf-8")
-    monkeypatch.setattr("leancert.verification.shutil.which", lambda name: "/tools/lake")
-    monkeypatch.setattr("leancert.verification.subprocess.run", successful_build)
-    report = lc.verify_exported_projects([tmp_path])
+    report = lc.verify_exported_projects([tmp_path], runtime=FakeRuntime())
     assert [Path(item.path) for item in report.artifacts] == [first.resolve(), second.resolve()]
 
 
-def test_tampered_source_is_rejected_before_lake_runs(tmp_path, monkeypatch):
+def test_tampered_source_is_rejected_before_runtime_runs(tmp_path):
     project = exported_project(tmp_path)
     source = project / "LeanCertExport.lean"
     source.write_text(source.read_text(encoding="utf-8") + "-- tampered\n", encoding="utf-8")
-    monkeypatch.setattr(
-        "leancert.verification.subprocess.run",
-        lambda *args, **kwargs: pytest.fail("lake must not run for an invalid artifact"),
-    )
-    report = lc.verify_exported_projects([project], lake="/tools/lake")
+    report = lc.verify_exported_projects([project], runtime=FakeRuntime())
     assert report.exit_code == lc.VerificationExitCode.INVALID_ARTIFACT
     assert "digest mismatch" in report.artifacts[0].message
 
 
-def test_tampered_certificate_payload_is_rejected_even_with_updated_file_hash(
-    tmp_path, monkeypatch
-):
+def test_tampered_certificate_payload_is_rejected_even_with_updated_file_hash(tmp_path):
     project = exported_project(tmp_path)
     certificate_path = project / "certificate.json"
     certificate = json.loads(certificate_path.read_text(encoding="utf-8"))
@@ -113,16 +153,12 @@ def test_tampered_certificate_payload_is_rejected_even_with_updated_file_hash(
 
     manifest["files"]["certificate.json"] = file_digest(certificate_path)
     manifest_path.write_text(json.dumps(manifest, sort_keys=True), encoding="utf-8")
-    monkeypatch.setattr(
-        "leancert.verification.subprocess.run",
-        lambda *args, **kwargs: pytest.fail("lake must not run for an invalid certificate"),
-    )
-    report = lc.verify_exported_projects([project], lake="/tools/lake")
+    report = lc.verify_exported_projects([project], runtime=FakeRuntime())
     assert report.exit_code == lc.VerificationExitCode.INVALID_ARTIFACT
     assert "payload digest" in report.artifacts[0].message
 
 
-def test_tampered_authority_is_rejected_even_with_updated_file_hash(tmp_path, monkeypatch):
+def test_tampered_authority_is_rejected_even_with_updated_file_hash(tmp_path):
     project = exported_project(tmp_path)
     certificate_path = project / "certificate.json"
     certificate = json.loads(certificate_path.read_text(encoding="utf-8"))
@@ -134,52 +170,41 @@ def test_tampered_authority_is_rejected_even_with_updated_file_hash(tmp_path, mo
 
     manifest["files"]["certificate.json"] = file_digest(certificate_path)
     manifest_path.write_text(json.dumps(manifest, sort_keys=True), encoding="utf-8")
-    monkeypatch.setattr(
-        "leancert.verification.subprocess.run",
-        lambda *args, **kwargs: pytest.fail("lake must not run for a forged authority"),
-    )
-    report = lc.verify_exported_projects([project], lake="/tools/lake")
+    report = lc.verify_exported_projects([project], runtime=FakeRuntime())
     assert report.exit_code == lc.VerificationExitCode.INVALID_ARTIFACT
     assert "authority" in report.artifacts[0].message
 
 
-def test_missing_lake_is_an_infrastructure_failure(tmp_path, monkeypatch):
+def test_missing_managed_environment_is_an_infrastructure_failure(tmp_path):
     project = exported_project(tmp_path)
-    monkeypatch.setattr("leancert.verification.shutil.which", lambda name: None)
-    report = lc.verify_exported_projects([project])
+    report = lc.verify_exported_projects([project], runtime=FakeRuntime(missing=True))
     assert report.exit_code == lc.VerificationExitCode.INFRASTRUCTURE_FAILURE
     assert report.artifacts[0].status == "infrastructure_failure"
 
 
-def test_lake_rejection_is_a_verification_failure(tmp_path, monkeypatch):
+def test_kernel_rejection_is_a_verification_failure(tmp_path):
     project = exported_project(tmp_path)
-    monkeypatch.setattr("leancert.verification.shutil.which", lambda name: "/tools/lake")
-    monkeypatch.setattr(
-        "leancert.verification.subprocess.run",
-        lambda command, **kwargs: subprocess.CompletedProcess(command, 1, "bad theorem"),
+    report = lc.verify_exported_projects(
+        [project], runtime=FakeRuntime(ok=False, output="bad theorem")
     )
-    report = lc.verify_exported_projects([project])
     assert report.exit_code == lc.VerificationExitCode.VERIFICATION_FAILED
     assert report.artifacts[0].build_output == "bad theorem"
 
 
-def test_timeout_has_a_distinct_exit_code(tmp_path, monkeypatch):
+def test_timeout_has_a_distinct_exit_code(tmp_path):
     project = exported_project(tmp_path)
-    monkeypatch.setattr("leancert.verification.shutil.which", lambda name: "/tools/lake")
-
-    def timeout(*args, **kwargs):
-        raise subprocess.TimeoutExpired(args[0], kwargs["timeout"], output="still building")
-
-    monkeypatch.setattr("leancert.verification.subprocess.run", timeout)
-    report = lc.verify_exported_projects([project], timeout=1)
+    report = lc.verify_exported_projects(
+        [project],
+        runtime=FakeRuntime(ok=False, timed_out=True, output="still building"),
+        timeout=1,
+    )
     assert report.exit_code == lc.VerificationExitCode.RESOURCE_LIMIT
     assert report.artifacts[0].build_output == "still building"
 
 
 def test_cli_emits_stable_json_report(tmp_path, monkeypatch, capsys):
     project = exported_project(tmp_path)
-    monkeypatch.setattr("leancert.verification.shutil.which", lambda name: "/tools/lake")
-    monkeypatch.setattr("leancert.verification.subprocess.run", successful_build)
+    monkeypatch.setattr("leancert.verification.Runtime", FakeRuntime)
     assert main(["verify", str(project), "--format", "json"]) == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["schema_version"] == "leancert-verification-report/1"
