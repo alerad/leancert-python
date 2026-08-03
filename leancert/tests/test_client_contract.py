@@ -1,30 +1,38 @@
 """Bridge response validation without launching a bridge process."""
 
 import io
-import os
 import threading
+from types import SimpleNamespace
 
 import pytest
+from lean_runtime import EnvironmentError as RuntimeEnvironmentError
 
+import leancert.client as client_module
 from leancert.client import LeanClient
 from leancert.exceptions import BridgeError, BridgeRemoteError
 from leancert.protocol import BridgeHandshake
 
 
-class FakeProcess:
+class FakeSession:
     def __init__(self, responses: str):
         self.stdin = io.StringIO()
         self.stdout = io.StringIO(responses)
         self.stderr = io.StringIO()
+        self.execution_id = "execution_test"
+        self.running = True
 
     def poll(self):
         return None
 
+    def close(self):
+        self.running = False
+        return SimpleNamespace(exit_code=0, stdout="", stderr="")
+
 
 def raw_client(responses: str) -> LeanClient:
     client = LeanClient.__new__(LeanClient)
-    client.binary_path = "unused"
-    client._process = FakeProcess(responses)
+    client._session = FakeSession(responses)
+    client.execution_result = None
     client._request_id = 0
     client._contract_checked = True
     client._bridge_info = {
@@ -57,8 +65,7 @@ def test_response_envelope_has_exactly_one_payload():
 
 def test_structured_remote_error_retains_code_and_data():
     client = raw_client(
-        '{"id":1,"error":{"code":"invalid_params","message":"bad box",'
-        '"data":{"field":"box"}}}\n'
+        '{"id":1,"error":{"code":"invalid_params","message":"bad box","data":{"field":"box"}}}\n'
     )
     with pytest.raises(BridgeRemoteError) as captured:
         client.ping()
@@ -74,29 +81,143 @@ def test_unadvertised_operation_is_rejected_before_write():
     with pytest.raises(BridgeError, match="does not advertise"):
         client.eval_interval({}, [])
 
-    assert client._process.stdin.getvalue() == ""
+    assert client._session.stdin.getvalue() == ""
 
 
-def test_binary_discovery_does_not_implicitly_use_sibling_checkout(tmp_path, monkeypatch):
-    package = tmp_path / "python" / "leancert"
-    package.mkdir(parents=True)
-    sibling = tmp_path / "python" / "leancert-bridge" / ".lake" / "build" / "bin"
-    sibling.mkdir(parents=True)
-    (sibling / "lean_bridge").write_text("development binary")
-    monkeypatch.setattr("leancert.client.__file__", str(package / "client.py"))
-    monkeypatch.chdir(tmp_path / "python")
-    monkeypatch.delenv("LEANCERT_BRIDGE_PATH", raising=False)
-    monkeypatch.setattr("leancert.client.shutil.which", lambda name: None)
+def test_environment_resolution_is_lazy():
+    class FakeRuntime:
+        def __init__(self):
+            self.calls = []
 
-    with pytest.raises(FileNotFoundError):
-        LeanClient()
+        def ensure_references(self, references, *, timeout):
+            self.calls.append((references, timeout))
+            return SimpleNamespace(id="environment_test")
+
+    runtime = FakeRuntime()
+    client = LeanClient(package_ref="github:a/b@v1", runtime=runtime, artifact_command=())
+    assert runtime.calls == []
+    assert client.environment_id == "environment_test"
+    assert runtime.calls == [(["github:a/b@v1"], 3600.0)]
 
 
-def test_explicit_environment_bridge_remains_supported(tmp_path, monkeypatch):
-    binary = tmp_path / "lean_bridge"
-    binary.write_text("explicit binary")
-    monkeypatch.setenv("LEANCERT_BRIDGE_PATH", os.fspath(binary))
-    assert LeanClient().binary_path == os.fspath(binary)
+def test_default_clients_share_one_resolved_environment(monkeypatch):
+    class FakeRuntime:
+        def __init__(self):
+            self.calls = []
+
+        def ensure_references(self, references, *, timeout):
+            self.calls.append((references, timeout))
+            return SimpleNamespace(id="environment_shared")
+
+    runtime = FakeRuntime()
+    monkeypatch.setattr(client_module, "_DEFAULT_RUNTIME", runtime)
+    monkeypatch.setattr(client_module, "_DEFAULT_ENVIRONMENTS", {})
+    first = LeanClient(package_ref="github:a/b@" + "a" * 40, artifact_command=())
+    second = LeanClient(package_ref="github:a/b@" + "a" * 40, artifact_command=())
+
+    assert first.environment is second.environment
+    assert runtime.calls == [(["github:a/b@" + "a" * 40], 3600.0)]
+
+
+def test_environment_resolution_timeout_is_configurable():
+    class FakeRuntime:
+        def __init__(self):
+            self.timeout = None
+
+        def ensure_references(self, references, *, timeout):
+            assert references == ["github:a/b@v1"]
+            self.timeout = timeout
+            return SimpleNamespace(id="environment_test")
+
+    runtime = FakeRuntime()
+    client = LeanClient(
+        package_ref="github:a/b@v1",
+        runtime=runtime,
+        resolution_timeout_seconds=7200,
+        artifact_command=(),
+    )
+    assert client.environment_id == "environment_test"
+    assert runtime.timeout == 7200.0
+
+
+@pytest.mark.parametrize("timeout", [0, -1, float("inf"), True])
+def test_environment_resolution_timeout_must_be_positive_and_finite(timeout):
+    with pytest.raises(ValueError, match="finite positive"):
+        LeanClient(resolution_timeout_seconds=timeout)
+
+
+def test_artifact_hydration_is_part_of_the_managed_environment_lock():
+    from dataclasses import dataclass
+
+    @dataclass(frozen=True)
+    class Package:
+        artifact_command: tuple[str, ...] = ()
+
+    @dataclass(frozen=True)
+    class Spec:
+        packages: tuple[Package, ...]
+
+    class FakeRuntime:
+        def __init__(self):
+            self.resolved = None
+
+        def open(self, identifier):
+            raise RuntimeEnvironmentError(f"unknown environment: {identifier}")
+
+        def spec_from_references(self, references):
+            assert references == ["github:a/b@v1"]
+            return Spec((Package(),))
+
+        def resolve(self, spec, *, timeout):
+            self.resolved = (spec, timeout)
+            return "locked"
+
+        def ensure(self, lock, *, name):
+            assert lock == "locked"
+            assert name.startswith("leancert-")
+            return SimpleNamespace(id="environment_hydrated")
+
+    runtime = FakeRuntime()
+    client = LeanClient(package_ref="github:a/b@v1", runtime=runtime)
+    assert client.environment_id == "environment_hydrated"
+    spec, timeout = runtime.resolved
+    assert spec.packages[0].artifact_command == (
+        "lake",
+        "exe",
+        "@LeanCertBridge/lean_bridge_runtime_prepare",
+    )
+    assert timeout == 3600.0
+
+
+def test_named_managed_environment_reopens_without_resolution():
+    environment = SimpleNamespace(id="environment_cached")
+
+    class FakeRuntime:
+        def open(self, identifier):
+            assert identifier.startswith("leancert-")
+            return environment
+
+        def spec_from_references(self, references):
+            raise AssertionError("a named cache hit must not resolve references")
+
+    client = LeanClient(package_ref="github:a/b@v1", runtime=FakeRuntime())
+    assert client.environment is environment
+
+
+def test_injected_environment_starts_managed_session():
+    session = FakeSession('{"id":1,"result":"pong"}\n')
+
+    class FakeEnvironment:
+        id = "environment_test"
+
+        def spawn_interactive(self, command, *, policy):
+            assert command == ["lake", "exe", "@LeanCertBridge/lean_bridge"]
+            assert policy.timeout_seconds == 3600
+            return session
+
+    client = LeanClient(environment=FakeEnvironment())
+    assert client.ping() == "pong"
+    assert client.execution_id == "execution_test"
 
 
 @pytest.mark.parametrize("missing", ["verified", "computed_lo", "computed_hi"])

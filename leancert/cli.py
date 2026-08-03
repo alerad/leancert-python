@@ -13,8 +13,8 @@ from .verification import verify_exported_projects
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="leancert")
     commands = parser.add_subparsers(dest="command", required=True)
-    doctor = commands.add_parser("doctor", help="diagnose the bundled Lean bridge")
-    doctor.add_argument("--bridge", help="explicit path to a lean_bridge binary")
+    doctor = commands.add_parser("doctor", help="diagnose the managed Lean bridge")
+    doctor.add_argument("--package-ref", help="exact lean-runtime Bridge package reference")
     doctor.add_argument("--json", action="store_true", help="emit machine-readable JSON")
     verify = commands.add_parser("verify", help="independently rebuild exported LeanCert projects")
     verify.add_argument(
@@ -29,7 +29,6 @@ def _parser() -> argparse.ArgumentParser:
         default="kernel",
         help="required exported theorem trust class (default: kernel)",
     )
-    verify.add_argument("--lake", help="explicit path to the lake executable")
     verify.add_argument(
         "--timeout",
         type=float,
@@ -49,7 +48,7 @@ def _parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     if args.command == "doctor":
-        doctor_report = diagnose(args.bridge)
+        doctor_report = diagnose(args.package_ref)
         if args.json:
             print(json.dumps(doctor_report.to_dict(), sort_keys=True))
         else:
@@ -62,7 +61,6 @@ def main(argv: list[str] | None = None) -> int:
             verification_report = verify_exported_projects(
                 args.paths,
                 require_trust=args.require_trust,
-                lake=args.lake,
                 timeout=args.timeout,
                 fail_fast=args.fail_fast,
             )

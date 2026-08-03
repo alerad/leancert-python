@@ -165,9 +165,12 @@ class Solver:
         auto_simplify: bool = True,
         auto_affine: bool = True,
         *,
+        package_ref=None,
+        runtime=None,
+        environment=None,
+        execution_policy=None,
+        command=None,
         enclosure_profile=None,
-        project_dir=None,
-        binary_path=None,
     ):
         """
         Initialize the solver.
@@ -187,16 +190,30 @@ class Solver:
         self._auto_simplify = auto_simplify
         self._auto_affine = auto_affine
         if client is not None and any(
-            value is not None for value in (enclosure_profile, project_dir, binary_path)
+            value is not None
+            for value in (
+                package_ref,
+                runtime,
+                environment,
+                execution_policy,
+                command,
+                enclosure_profile,
+            )
         ):
             raise ValueError(
-                "enclosure_profile, project_dir, and binary_path configure an owned client"
+                "runtime and Bridge options configure an owned client"
             )
-        self._client_options = {
-            "binary_path": binary_path,
-            "enclosure_profile": enclosure_profile,
-            "project_dir": project_dir,
-        }
+        self._client_options = {"enclosure_profile": enclosure_profile}
+        if package_ref is not None:
+            self._client_options["package_ref"] = package_ref
+        if runtime is not None:
+            self._client_options["runtime"] = runtime
+        if environment is not None:
+            self._client_options["environment"] = environment
+        if execution_policy is not None:
+            self._client_options["execution_policy"] = execution_policy
+        if command is not None:
+            self._client_options["command"] = command
 
     def _ensure_client(self) -> LeanClient:
         """Ensure we have a client connection."""
@@ -560,15 +577,19 @@ class Solver:
 
     @staticmethod
     def _bridge_provenance(client: Any) -> BridgeProvenance:
+        from .operations.bounds import bridge_provenance
+
         try:
-            info = client.bridge_info
+            return bridge_provenance(client)
         except (AttributeError, TypeError):
             try:
-                info = client.get_info()
+                info = client.bridge_info
             except (AttributeError, TypeError):
-                info = {}
+                try:
+                    info = client.get_info()
+                except (AttributeError, TypeError):
+                    info = {}
         build = info.get('build') if isinstance(info.get('build'), dict) else {}
-        contract = getattr(client, "bridge_contract", None)
         return BridgeProvenance(
             bridge_api_version=info.get('bridge_api_version'),
             protocol_version=info.get('protocol_version'),
@@ -579,7 +600,6 @@ class Solver:
             source_digest=build.get('source_digest'),
             environment_digest=build.get('environment_digest'),
             build_profile=build.get('profile'),
-            capability_digest=(contract.capability_digest if contract is not None else None),
         )
 
     def _verify_bound_checked(

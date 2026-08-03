@@ -4,10 +4,9 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
-from pathlib import Path
 from typing import Any
 
-from .client import LeanClient
+from .client import DEFAULT_BRIDGE_PACKAGE_REF, LeanClient
 from .protocol import ProtocolVersion
 
 
@@ -36,26 +35,28 @@ class DoctorReport:
 
 
 def diagnose(
-    binary_path: str | None = None,
+    package_ref: str | None = None,
     *,
     client_factory: Callable[..., LeanClient] = LeanClient,
 ) -> DoctorReport:
-    """Inspect the installed binary and negotiate the production contract."""
+    """Ensure the managed environment and negotiate the production contract."""
     checks: list[DoctorCheck] = []
     try:
-        client = client_factory(binary_path=binary_path)
+        client = client_factory(package_ref=package_ref or DEFAULT_BRIDGE_PACKAGE_REF)
     except Exception as exc:
-        return DoctorReport((DoctorCheck("binary", False, str(exc)),), {})
+        return DoctorReport((DoctorCheck("environment", False, str(exc)),), {})
 
     try:
-        resolved = Path(client.binary_path).expanduser().resolve()
-        checks.append(DoctorCheck("binary", resolved.is_file(), str(resolved)))
         try:
             info = client.get_info()
             contract = client.bridge_contract
+            environment_id = client.environment_id
+            execution_id = client.execution_id
         except Exception as exc:
             checks.append(DoctorCheck("handshake", False, str(exc)))
             return DoctorReport(tuple(checks), {})
+
+        checks.append(DoctorCheck("environment", True, environment_id))
 
         checks.append(
             DoctorCheck(
@@ -68,27 +69,23 @@ def diagnose(
         checks.append(
             DoctorCheck(
                 "replayable_bounds",
-                bound is not None
-                and "bound-check/2" in bound.certificate_schemas
-                and contract.dependencies is not None,
-                "fixed bound replay and resolved dependency provenance",
+                bound is not None and "bound-check/2" in bound.certificate_schemas,
+                "fixed bound replay",
             )
         )
         adaptive = contract.capability("verify_adaptive")
         checks.append(
             DoctorCheck(
                 "checked_adaptive",
-                adaptive is not None
-                and "adaptive-bound-check/1" in adaptive.certificate_schemas,
+                adaptive is not None and "adaptive-bound-check/1" in adaptive.certificate_schemas,
                 "checked rational adaptive optimizer",
             )
         )
-        build = contract.build
         checks.append(
             DoctorCheck(
-                "release_provenance",
-                build is not None and build.release_ready,
-                "release binary with source and environment digests",
+                "runtime_provenance",
+                isinstance(execution_id, str) and bool(execution_id),
+                f"managed execution {execution_id or '<unavailable>'}",
             )
         )
         return DoctorReport(tuple(checks), dict(info))

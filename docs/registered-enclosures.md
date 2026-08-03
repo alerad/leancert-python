@@ -10,10 +10,16 @@ submit Lean syntax, or change the registry.
 ```python
 import leancert as lc
 from leancert import ast
+from lean_runtime import Runtime
+
+runtime = Runtime()
+environment = runtime.open("env_<profiled-downstream-environment-id>")
 
 with lc.Solver(
+    runtime=runtime,
+    environment=environment,
+    command=("lake", "exe", "my_profiled_bridge"),
     enclosure_profile="./leancert-enclosures.json",
-    project_dir="./my-lean-project",
 ) as solver:
     li = solver.enclosures.function("MyProject.Enclosures.li")
     x = ast.var("x")
@@ -26,9 +32,11 @@ with lc.Solver(
     assert replayed[0]["replayed"] is True
 ```
 
-`project_dir` starts the Bridge through `lake env`, so the modules named by the
-profile can be resolved from that downstream Lake environment. An explicit
-`binary_path` may be supplied when testing a locally built Bridge.
+The supplied managed environment must contain the downstream modules and a
+profiled Bridge executable that statically links them. The command selects that
+executable inside a disposable environment instance. This keeps custom
+enclosures extensible without accepting raw host binary paths or ambient Lake
+projects.
 
 The profile has this closed form:
 
