@@ -18,7 +18,7 @@ from typing import Any
 
 from .exceptions import ProtocolViolation
 
-SUPPORTED_BRIDGE_API_MAJORS = frozenset({1, 2})
+SUPPORTED_BRIDGE_API_MAJORS = frozenset({1, 2, 3})
 TYPED_CONTRACT_MINIMUM = (1, 1, 0)
 
 
@@ -580,10 +580,13 @@ class BridgeHandshake:
             raise ProtocolViolation(
                 "typed bridges must advertise expression nodes, certificate schemas, and routes"
             )
-        build = None if api.major < 2 else BuildProvenance.parse(obj.get("build"))
+        # Contract 2.x originally embedded supply-chain provenance in the
+        # Bridge handshake. Managed execution environments now own that
+        # identity, while older Bridge releases remain valid inputs.
+        build = BuildProvenance.parse(obj["build"]) if "build" in obj else None
         dependencies = (
-            ResolvedDependencies.parse(obj.get("dependencies"))
-            if api >= ProtocolVersion(2, 1, 0)
+            ResolvedDependencies.parse(obj["dependencies"])
+            if "dependencies" in obj
             else None
         )
         enclosure_profile = (

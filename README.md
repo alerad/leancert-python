@@ -18,10 +18,11 @@ Write Python, get mathematical proofs. LeanCert proves properties about your cod
 pip install leancert
 ```
 
-That's it! The package includes pre-built binaries - no Lean installation required.
-
-Bridge binaries are sourced from the decoupled `leancert-bridge` release tag
-pinned in `bridge-version.txt`.
+The wheel is pure Python. On the first checked operation, `lean-runtime`
+resolves the SDK's exact `leancert-bridge` Git revision, installs its declared
+Lean toolchain in an isolated cache if necessary, builds the environment, and
+starts a managed interactive session. Later runs reuse the content-addressed
+environment; no Bridge binary path or system-wide Lean installation is needed.
 
 The v1 overhaul also includes a bridge-independent, exact semantic model under
 `leancert.ast`. Its versioned encoding, binder rules, claim closure, and legacy
@@ -52,8 +53,9 @@ Exported projects can be audited without rerunning Python or numerical search:
 leancert verify exported_proofs/ --require-trust kernel
 ```
 
-After installation, `leancert doctor` checks the bundled binary, negotiated
-contract, replay support, adaptive checked route, and release provenance.
+After installation, `leancert doctor` checks the managed environment,
+negotiated contract, replay support, adaptive checked route, and runtime-owned
+execution provenance.
 
 ## Quick Start
 

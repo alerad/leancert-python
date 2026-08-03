@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import json
-import subprocess
 from copy import deepcopy
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -16,6 +16,7 @@ from leancert.expression_codec import compile_semantic_expression, lower_bridge_
 from leancert.protocol import BridgeHandshake
 
 FIXTURES = Path(__file__).parent / "fixtures"
+ENVIRONMENT_ID = "env_" + "a" * 64
 
 
 class ReplayClient:
@@ -25,6 +26,8 @@ class ReplayClient:
         self.bridge_contract = BridgeHandshake.parse(info)
         self.bridge_info = info
         self.responses = list(responses)
+        self.environment = SimpleNamespace(id=ENVIRONMENT_ID)
+        self.execution_id = "execution_" + "b" * 64
 
     def check_bound(self, *args, **kwargs):
         return deepcopy(self.responses.pop(0))
@@ -243,35 +246,50 @@ def test_export_refuses_to_overwrite_existing_directory(tmp_path):
         result.export_lean_project(str(destination), verify=False)
 
 
-def test_export_verification_builds_the_explicit_lean_target(tmp_path, monkeypatch):
+def test_export_verification_checks_source_in_originating_environment(tmp_path):
     x = ast.var("x")
     result = lc.prove(x <= 1, where={x: (0, 1)}, client=ReplayClient((response(),)))
     observed = {}
 
-    def run(command, **kwargs):
-        observed["command"] = command
-        observed["cwd"] = kwargs["cwd"]
-        return type("Completed", (), {"returncode": 0, "stdout": "kernel checked"})()
+    class Environment:
+        def check_files(self, files, *, entrypoint, policy):
+            observed["files"] = files
+            observed["entrypoint"] = entrypoint
+            observed["policy"] = policy
+            return SimpleNamespace(
+                ok=True,
+                timed_out=False,
+                stdout="kernel checked",
+                stderr="",
+            )
 
-    monkeypatch.setattr("leancert.export.shutil.which", lambda name: "/toolchain/lake")
-    monkeypatch.setattr("leancert.export.subprocess.run", run)
-    exported = result.export_lean_project(str(tmp_path / "proof"))
+    def open_environment(environment_id):
+        observed["environment_id"] = environment_id
+        return Environment()
+
+    runtime = SimpleNamespace(open=open_environment)
+    exported = result.export_lean_project(str(tmp_path / "proof"), runtime=runtime)
     assert isinstance(exported, lc.ExportVerified)
-    assert observed["command"] == ["/toolchain/lake", "build", "LeanCertExport"]
-    assert observed["cwd"].parent == tmp_path.resolve()
-    assert observed["cwd"].name.startswith(".proof.")
+    assert observed["environment_id"] == ENVIRONMENT_ID
+    assert observed["entrypoint"] == "LeanCertExport.lean"
+    assert "#assert_trust kernel" in observed["files"]["LeanCertExport.lean"]
     assert (tmp_path / "proof").is_dir()
 
 
 def test_failed_export_is_atomic(tmp_path, monkeypatch):
     x = ast.var("x")
     result = lc.prove(x <= 1, where={x: (0, 1)}, client=ReplayClient((response(),)))
-    monkeypatch.setattr("leancert.export.shutil.which", lambda name: "/toolchain/lake")
+    environment = SimpleNamespace(
+        check_files=lambda *args, **kwargs: SimpleNamespace(
+            ok=False,
+            timed_out=False,
+            stdout="bad certificate",
+            stderr="",
+        )
+    )
     monkeypatch.setattr(
-        "leancert.export.subprocess.run",
-        lambda *args, **kwargs: type(
-            "Completed", (), {"returncode": 1, "stdout": "bad certificate"}
-        )(),
+        "leancert.export.Runtime",
+        lambda: SimpleNamespace(open=lambda environment_id: environment),
     )
 
     exported = result.export_lean_project(str(tmp_path / "proof"))
@@ -283,12 +301,18 @@ def test_failed_export_is_atomic(tmp_path, monkeypatch):
 def test_export_timeout_is_typed_and_atomic(tmp_path, monkeypatch):
     x = ast.var("x")
     result = lc.prove(x <= 1, where={x: (0, 1)}, client=ReplayClient((response(),)))
-    monkeypatch.setattr("leancert.export.shutil.which", lambda name: "/toolchain/lake")
-
-    def timeout(*args, **kwargs):
-        raise subprocess.TimeoutExpired(args[0], kwargs["timeout"], output="still building")
-
-    monkeypatch.setattr("leancert.export.subprocess.run", timeout)
+    environment = SimpleNamespace(
+        check_files=lambda *args, **kwargs: SimpleNamespace(
+            ok=False,
+            timed_out=True,
+            stdout="still building",
+            stderr="",
+        )
+    )
+    monkeypatch.setattr(
+        "leancert.export.Runtime",
+        lambda: SimpleNamespace(open=lambda environment_id: environment),
+    )
     exported = result.export_lean_project(str(tmp_path / "proof"))
     assert isinstance(exported, lc.ExportResourceLimit)
     assert exported.timeout_seconds == 900

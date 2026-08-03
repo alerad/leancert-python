@@ -47,8 +47,9 @@ the explicitly labeled `NormalizedTrue` result described below.
 Each requested lower or upper bound is checked exactly once. A successful
 result retains the normalized closed claim, its `ClaimDigest`, the enclosure,
 checker and verifier identities, verification route, numerical backend, and
-the complete build provenance. Contract 2.1 additionally retains the exact
-fixed checker input and resolved Lean dependencies needed for
+the exact `lean-runtime` environment and execution identities. Contract 2.1
+additionally retains the exact fixed checker input and runtime-resolved Lean
+dependency identities needed for
 [independently rebuildable export](export.md). Expression-to-expression
 comparisons retain an explicit proof-relevant lowering record, so export states
 and proves the original inequality rather than only its normalized checker
