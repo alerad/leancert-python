@@ -31,6 +31,7 @@ from ..result import (
     ProofResult,
     Rejected,
     ReplayableBoundCertificate,
+    ReplayableStrictBoundCertificate,
     ReplayBoundConfig,
     Unsupported,
     Verified,
@@ -46,6 +47,8 @@ class BoundPlan:
     lower: Fraction | None
     upper: Fraction | None
     lowerings: tuple[BoundComparisonLowering, ...]
+    lower_strict: bool = False
+    upper_strict: bool = False
 
     @property
     def domain(self) -> ast.Box | None:
@@ -61,18 +64,18 @@ def _rational(expression: ast.Expr, role: str) -> Fraction:
 
 def _comparison_bound(
     claim: ast.ComparisonClaim,
-) -> tuple[ast.Expr, str, Fraction, BoundComparisonLowering]:
-    if claim.relation is not ast.Relation.LE:
-        if claim.relation is ast.Relation.LT:
-            raise _UnsupportedBound("strict inequalities are not supported by check_bound/1")
+) -> tuple[ast.Expr, str, Fraction, bool, BoundComparisonLowering]:
+    if claim.relation not in {ast.Relation.LE, ast.Relation.LT}:
         raise _UnsupportedBound(
             f"comparison relation {claim.relation.value!r} is not a checked bound"
         )
+    strict = claim.relation is ast.Relation.LT
     if isinstance(claim.rhs, ast.RationalConstant):
         return (
             claim.lhs,
             "upper",
             claim.rhs.value,
+            strict,
             BoundComparisonLowering(
                 claim.lhs,
                 claim.rhs,
@@ -80,6 +83,7 @@ def _comparison_bound(
                 "upper",
                 claim.rhs.value,
                 "lhs_le_constant",
+                strict,
             ),
         )
     if isinstance(claim.lhs, ast.RationalConstant):
@@ -87,6 +91,7 @@ def _comparison_bound(
             claim.rhs,
             "lower",
             claim.lhs.value,
+            strict,
             BoundComparisonLowering(
                 claim.lhs,
                 claim.rhs,
@@ -94,6 +99,7 @@ def _comparison_bound(
                 "lower",
                 claim.lhs.value,
                 "constant_le_rhs",
+                strict,
             ),
         )
     difference = ast.normalize(claim.lhs - claim.rhs)
@@ -101,6 +107,7 @@ def _comparison_bound(
         difference,
         "upper",
         Fraction(0),
+        strict,
         BoundComparisonLowering(
             claim.lhs,
             claim.rhs,
@@ -108,6 +115,7 @@ def _comparison_bound(
             "upper",
             Fraction(0),
             "subtract_rhs_le_zero",
+            strict,
         ),
     )
 
@@ -139,9 +147,11 @@ def plan_bound_claim(claim: ast.Claim) -> BoundPlan:
     lower: Fraction | None = None
     upper: Fraction | None = None
     lowerings: list[BoundComparisonLowering] = []
+    lower_strict = False
+    upper_strict = False
     for item in claims:
         assert isinstance(item, ast.ComparisonClaim)
-        candidate, direction, bound, lowering = _comparison_bound(item)
+        candidate, direction, bound, strict, lowering = _comparison_bound(item)
         candidate = ast.normalize(candidate)
         if expression is None:
             expression = candidate
@@ -153,14 +163,24 @@ def plan_bound_claim(claim: ast.Claim) -> BoundPlan:
             if lower is not None:
                 raise _UnsupportedBound("a claim may contain at most one lower bound")
             lower = bound
+            lower_strict = strict
         else:
             if upper is not None:
                 raise _UnsupportedBound("a claim may contain at most one upper bound")
             upper = bound
+            upper_strict = strict
         lowerings.append(lowering)
 
     assert expression is not None
-    return BoundPlan(expression, tuple(axes), lower, upper, tuple(lowerings))
+    return BoundPlan(
+        expression,
+        tuple(axes),
+        lower,
+        upper,
+        tuple(lowerings),
+        lower_strict,
+        upper_strict,
+    )
 
 
 def _rat(value: Fraction) -> dict[str, int]:
@@ -255,6 +275,55 @@ def _replay_certificate(
     )
 
 
+def _strict_replay_certificate(
+    response: dict[str, Any],
+    *,
+    contract: Any,
+    expression_json: dict[str, Any],
+    box_json: list[dict[str, Any]],
+    bound: Fraction,
+    relation: str,
+    taylor_depth: int,
+) -> ReplayableStrictBoundCertificate | None:
+    outcome = contract.parse_strict_bound_outcome(response, expected_relation=relation)
+    descriptor = outcome.certificate
+    if descriptor is None or descriptor.payload is None:
+        return None
+    payload = descriptor.payload
+    expected_bound = _rat(bound)
+    expected_expression = _lower_checked_expression(expression_json)
+    if dict(payload.expression) != expected_expression:
+        raise ProtocolViolation("bridge strict replay expression does not match the request")
+    if list(payload.canonical["box"]) != box_json:
+        raise ProtocolViolation("bridge strict replay box does not match the request")
+    if dict(payload.canonical["target_bound"]) != expected_bound:
+        raise ProtocolViolation("bridge strict replay target does not match the request")
+    if payload.relation != relation or payload.config.taylor_depth != taylor_depth:
+        raise ProtocolViolation(
+            "bridge strict replay relation or Taylor depth does not match the request"
+        )
+    return ReplayableStrictBoundCertificate(
+        schema_version=descriptor.schema_version,
+        payload_schema="checked-strict-bound/1",
+        checker=descriptor.checker,
+        verifier=descriptor.verifier,
+        verification_route=descriptor.verification_route,
+        payload_digest=payload.digest,
+        expression=payload.expression,
+        box=tuple(ResultInterval(item.lower.fraction, item.upper.fraction) for item in payload.box),
+        relation=payload.relation,
+        target_bound=payload.target_bound.fraction,
+        certified_bound=payload.certified_bound.fraction,
+        config=ReplayBoundConfig(
+            payload.config.max_iterations,
+            payload.config.tolerance.fraction,
+            payload.config.use_monotonicity,
+            payload.config.taylor_depth,
+        ),
+        canonical_payload=payload.canonical,
+    )
+
+
 def unsupported_result(
     original_claim: ast.Claim,
     normalized_claim: ast.Claim,
@@ -292,7 +361,11 @@ def execute_bound_plan(
     contract = client.bridge_contract
     provenance = bridge_provenance(client)
     capability = contract.capability("check_bound")
-    if capability is None:
+    needs_nonstrict = (plan.lower is not None and not plan.lower_strict) or (
+        plan.upper is not None and not plan.upper_strict
+    )
+    needs_strict = plan.lower_strict or plan.upper_strict
+    if needs_nonstrict and capability is None:
         return unsupported_result(
             original_claim,
             normalized_claim,
@@ -301,7 +374,7 @@ def execute_bound_plan(
             provenance=provenance,
             plan=plan,
         )
-    if (
+    if needs_nonstrict and (
         capability.request_schema != "check-bound-request/1"
         or capability.result_schema != "bound-outcome/1"
         or not capability.certificate_schemas.intersection({"bound-check/1", "bound-check/2"})
@@ -311,6 +384,29 @@ def execute_bound_plan(
             normalized_claim,
             claim_id,
             "bridge check_bound schemas are not supported by this SDK",
+            provenance=provenance,
+            plan=plan,
+        )
+    strict_capability = contract.capability("check_strict_bound")
+    if needs_strict and strict_capability is None:
+        return unsupported_result(
+            original_claim,
+            normalized_claim,
+            claim_id,
+            "bridge does not advertise the checked check_strict_bound capability",
+            provenance=provenance,
+            plan=plan,
+        )
+    if needs_strict and (
+        strict_capability.request_schema != "check-strict-bound-request/1"
+        or strict_capability.result_schema != "strict-bound-outcome/1"
+        or "strict-bound-check/1" not in strict_capability.certificate_schemas
+    ):
+        return unsupported_result(
+            original_claim,
+            normalized_claim,
+            claim_id,
+            "bridge check_strict_bound schemas are not supported by this SDK",
             provenance=provenance,
             plan=plan,
         )
@@ -336,16 +432,29 @@ def execute_bound_plan(
         for axis in plan.axes
     ]
     checks: list[BoundCheckEvidence] = []
-    for direction, bound in (("lower", plan.lower), ("upper", plan.upper)):
+    for direction, bound, strict in (
+        ("lower", plan.lower, plan.lower_strict),
+        ("upper", plan.upper, plan.upper_strict),
+    ):
         if bound is None:
             continue
-        response = client.check_bound(
-            expression_json,
-            box_json,
-            _rat(bound),
-            is_upper_bound=direction == "upper",
-            taylor_depth=taylor_depth,
-        )
+        relation = "lt" if direction == "upper" else "gt"
+        if strict:
+            response = client.check_strict_bound(
+                expression_json,
+                box_json,
+                _rat(bound),
+                relation=relation,
+                taylor_depth=taylor_depth,
+            )
+        else:
+            response = client.check_bound(
+                expression_json,
+                box_json,
+                _rat(bound),
+                is_upper_bound=direction == "upper",
+                taylor_depth=taylor_depth,
+            )
         enclosure_json = response.get("enclosure") or {
             "lo": response["computed_lo"],
             "hi": response["computed_hi"],
@@ -354,14 +463,26 @@ def execute_bound_plan(
             _parse_rat(enclosure_json["lo"]), _parse_rat(enclosure_json["hi"])
         )
         status = response.get("status", "verified" if response["verified"] else "inconclusive")
-        replay = _replay_certificate(
-            response,
-            contract=contract,
-            expression_json=expression_json,
-            box_json=box_json,
-            bound=bound,
-            direction=direction,
-            taylor_depth=taylor_depth,
+        replay = (
+            _strict_replay_certificate(
+                response,
+                contract=contract,
+                expression_json=expression_json,
+                box_json=box_json,
+                bound=bound,
+                relation=relation,
+                taylor_depth=taylor_depth,
+            )
+            if strict
+            else _replay_certificate(
+                response,
+                contract=contract,
+                expression_json=expression_json,
+                box_json=box_json,
+                bound=bound,
+                direction=direction,
+                taylor_depth=taylor_depth,
+            )
         )
         checks.append(
             BoundCheckEvidence(
@@ -369,12 +490,13 @@ def execute_bound_plan(
                 requested_bound=bound,
                 enclosure=enclosure,
                 status=status,
-                operation="check_bound",
+                operation="check_strict_bound" if strict else "check_bound",
                 backend=response.get("backend"),
                 taylor_depth=taylor_depth,
                 certificate=response.get("certificate"),
                 replay_certificate=replay,
                 raw_response=dict(response),
+                strict=strict,
             )
         )
 
@@ -400,7 +522,7 @@ def execute_bound_plan(
     if any(check.status == "unsupported" for check in checks):
         return Unsupported(
             **common,
-            reason="The bridge rejected this expression as unsupported by check_bound/1.",
+            reason="The bridge rejected this expression as unsupported by its checked bound route.",
         )
     if refutation_config is not None and refutation_config.enabled:
         rejected = _search_checked_refutation(
@@ -447,9 +569,9 @@ def _search_checked_refutation(
         if candidate_index >= max_candidates:
             break
         point_box = [{"lo": _rat(value), "hi": _rat(value)} for value in point]
-        for original_direction, original_bound in (
-            ("lower", plan.lower),
-            ("upper", plan.upper),
+        for original_direction, original_bound, original_strict in (
+            ("lower", plan.lower, plan.lower_strict),
+            ("upper", plan.upper, plan.upper_strict),
         ):
             if original_bound is None:
                 continue
@@ -468,9 +590,17 @@ def _search_checked_refutation(
                 _parse_rat(enclosure_json["lo"]),
                 _parse_rat(enclosure_json["hi"]),
             )
-            if original_direction == "upper" and enclosure.lo > original_bound:
+            if original_direction == "upper" and original_strict and enclosure.lo >= original_bound:
+                opposite_direction = "lower"
+                opposite_bound = original_bound
+            elif original_direction == "upper" and enclosure.lo > original_bound:
                 opposite_direction = "lower"
                 opposite_bound = (original_bound + enclosure.lo) / 2
+            elif (
+                original_direction == "lower" and original_strict and enclosure.hi <= original_bound
+            ):
+                opposite_direction = "upper"
+                opposite_bound = original_bound
             elif original_direction == "lower" and enclosure.hi < original_bound:
                 opposite_direction = "upper"
                 opposite_bound = (original_bound + enclosure.hi) / 2

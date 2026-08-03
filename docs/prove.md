@@ -35,6 +35,9 @@ two_sided = lc.prove(
 # Either side may be an expression. LeanCert checks sin(x) - x <= 0,
 # while retaining and exporting the semantic claim sin(x) <= x.
 comparison = lc.prove(ast.sin(x) <= x, where={x: (0, 1)})
+
+# Contract 2.7 proves a strict target from a checked interior bound.
+strict = lc.prove(x < 2, where={x: (0, 1)})
 ```
 
 Non-trivial expression equality is routed as two inequalities and returns an
@@ -69,9 +72,14 @@ replayable bound children as separate checked theorems plus a kernel-checked
 conjunction theorem. If any child is unsupported or inconclusive, the result is
 `IncompleteConjunction`; successful siblings are not discarded.
 
-Strict inequalities and external functions currently return `Unsupported`.
-They are not routed through a
-discovery API or silently weakened to non-strict bounds. A bridge that does not
+Contract 2.7 routes `<` and `>` only when the Bridge advertises
+`check_strict_bound`. The optimizer proposes an exact rational interior bound;
+Lean checks that fixed non-strict bound, and exact rational comparison supplies
+the strict margin. A domain touching the target is `Inconclusive`, not silently
+weakened to a non-strict claim. Older Bridges return `Unsupported` without
+receiving a strict request.
+
+External functions remain capability-gated. A bridge that does not
 advertise an expression node receives no request for that node. The semantic
 AST constants `ast.e` and `ast.log_two` currently have no Lean Core wire
 identity and therefore remain precisely unsupported. `ast.pi` and

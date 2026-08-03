@@ -87,6 +87,7 @@ class BoundComparisonLowering:
         "constant_le_rhs",
         "subtract_rhs_le_zero",
     ]
+    strict: bool = False
 
 
 @dataclass(frozen=True)
@@ -133,6 +134,33 @@ class ReplayableBoundCertificate:
     direction: Literal["lower", "upper"]
     config: ReplayBoundConfig
     canonical_payload: Mapping[str, Any]
+
+
+@dataclass(frozen=True)
+class ReplayableStrictBoundCertificate:
+    """Exact interior bound and fixed checker input from Bridge Contract 2.7."""
+
+    schema_version: str
+    payload_schema: str
+    checker: str
+    verifier: str
+    verification_route: str
+    payload_digest: str
+    expression: Mapping[str, Any]
+    box: tuple[Interval, ...]
+    relation: Literal["lt", "gt"]
+    target_bound: Fraction
+    certified_bound: Fraction
+    config: ReplayBoundConfig
+    canonical_payload: Mapping[str, Any]
+
+    @property
+    def direction(self) -> Literal["lower", "upper"]:
+        return "upper" if self.relation == "lt" else "lower"
+
+    @property
+    def bound(self) -> Fraction:
+        return self.target_bound
 
 
 @dataclass(frozen=True)
@@ -197,8 +225,9 @@ class BoundCheckEvidence:
     backend: Optional[str]
     taylor_depth: int
     certificate: Optional[Mapping[str, Any]] = None
-    replay_certificate: ReplayableBoundCertificate | None = None
+    replay_certificate: ReplayableBoundCertificate | ReplayableStrictBoundCertificate | None = None
     raw_response: Mapping[str, Any] = field(default_factory=dict)
+    strict: bool = False
 
 
 @dataclass(frozen=True)

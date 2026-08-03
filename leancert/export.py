@@ -28,6 +28,7 @@ from .result import (
     ReplayableIntegralCertificate,
     ReplayableKrawczykCertificate,
     ReplayableScalarRootCertificate,
+    ReplayableStrictBoundCertificate,
     Verified,
     VerifiedConjunction,
     VerifiedEventualBound,
@@ -158,7 +159,7 @@ def _interval(value: Any) -> str:
 
 
 def _render_project(
-    certificates: tuple[ReplayableBoundCertificate, ...],
+    certificates: tuple[ReplayableBoundCertificate | ReplayableStrictBoundCertificate, ...],
     lowerings: tuple[dict[str, Any], ...],
     *,
     equality_claim: bool = False,
@@ -173,6 +174,8 @@ def _render_project(
         "",
     ]
     for index, (certificate, lowering) in enumerate(zip(certificates, lowerings, strict=True)):
+        is_strict = isinstance(certificate, ReplayableStrictBoundCertificate)
+        fixed_bound = certificate.certified_bound if is_strict else certificate.bound
         expression = _core_expression(certificate.expression)
         support = _support_proof(certificate.expression)
         domain = ",\n  ".join(_interval(item) for item in certificate.box)
@@ -212,7 +215,7 @@ def _render_project(
                 "}",
                 "",
                 f"theorem certificate_{index} :",
-                f"    {expected_checker} expression_{index} domain_{index} {_rat(certificate.bound)} "
+                f"    {expected_checker} expression_{index} domain_{index} {_rat(fixed_bound)} "
                 f"config_{index} = true := by",
                 "  decide +kernel",
                 "",
@@ -220,22 +223,53 @@ def _render_project(
                 f"    ∀ (ρ : Nat → ℝ), Box.envMem ρ domain_{index} →",
                 f"      (∀ i, i ≥ domain_{index}.length → ρ i = 0) →",
                 (
-                    f"      Expr.eval ρ expression_{index} ≤ (({_rat(certificate.bound)}) : ℝ) :="
+                    f"      Expr.eval ρ expression_{index} ≤ (({_rat(fixed_bound)}) : ℝ) :="
                     if certificate.direction == "upper"
-                    else f"      (({_rat(certificate.bound)}) : ℝ) ≤ Expr.eval ρ expression_{index} :="
+                    else f"      (({_rat(fixed_bound)}) : ℝ) ≤ Expr.eval ρ expression_{index} :="
                 ),
                 f"  {expected_verifier}",
-                f"    expression_{index} expression_supported_{index} domain_{index} {_rat(certificate.bound)} "
+                f"    expression_{index} expression_supported_{index} domain_{index} {_rat(fixed_bound)} "
                 f"config_{index} certificate_{index}",
                 "",
                 f"#assert_trust kernel exported_claim_{index}",
                 "",
+            ]
+        )
+        checked_claim = f"exported_claim_{index}"
+        if is_strict:
+            strict_relation = (
+                f"Expr.eval ρ expression_{index} < (({_rat(certificate.target_bound)}) : ℝ)"
+                if certificate.relation == "lt"
+                else f"(({_rat(certificate.target_bound)}) : ℝ) < Expr.eval ρ expression_{index}"
+            )
+            composition = (
+                f"lt_of_le_of_lt (exported_claim_{index} ρ hρ htail) (by norm_num)"
+                if certificate.relation == "lt"
+                else f"lt_of_lt_of_le (by norm_num) (exported_claim_{index} ρ hρ htail)"
+            )
+            lines.extend(
+                [
+                    f"theorem strict_claim_{index} :",
+                    f"    ∀ (ρ : Nat → ℝ), Box.envMem ρ domain_{index} →",
+                    f"      (∀ i, i ≥ domain_{index}.length → ρ i = 0) →",
+                    f"      {strict_relation} := by",
+                    "  intro ρ hρ htail",
+                    f"  exact {composition}",
+                    "",
+                    f"#assert_trust kernel strict_claim_{index}",
+                    "",
+                ]
+            )
+            checked_claim = f"strict_claim_{index}"
+        semantic_relation = "<" if lowering.get("strict", False) else "≤"
+        lines.extend(
+            [
                 f"theorem semantic_claim_{index} :",
                 f"    ∀ (ρ : Nat → ℝ), Box.envMem ρ domain_{index} →",
                 f"      (∀ i, i ≥ domain_{index}.length → ρ i = 0) →",
-                f"      Expr.eval ρ semantic_lhs_{index} ≤ Expr.eval ρ semantic_rhs_{index} := by",
+                f"      Expr.eval ρ semantic_lhs_{index} {semantic_relation} Expr.eval ρ semantic_rhs_{index} := by",
                 "  intro ρ hρ htail",
-                f"  have h := exported_claim_{index} ρ hρ htail",
+                f"  have h := {checked_claim} ρ hρ htail",
                 f"  simp [expression_{index}, semantic_lhs_{index}, semantic_rhs_{index}, Expr.eval] at h ⊢",
                 "  linarith",
                 "",
@@ -268,7 +302,9 @@ def _render_project(
         )
     elif shared_domain:
         proposition = " ∧\n        ".join(
-            f"Expr.eval ρ semantic_lhs_{index} ≤ Expr.eval ρ semantic_rhs_{index}"
+            f"Expr.eval ρ semantic_lhs_{index} "
+            f"{'<' if lowerings[index].get('strict', False) else '≤'} "
+            f"Expr.eval ρ semantic_rhs_{index}"
             for index in range(len(certificates))
         )
         parts = [f"semantic_claim_{index} ρ hρ htail" for index in range(len(certificates))]
@@ -301,7 +337,7 @@ def _is_equality_claim(claim: ast.Claim | None) -> bool:
 
 def _bound_export_lowerings(
     result: Verified,
-    certificates: tuple[ReplayableBoundCertificate, ...],
+    certificates: tuple[ReplayableBoundCertificate | ReplayableStrictBoundCertificate, ...],
 ) -> tuple[dict[str, Any], ...]:
     axes = () if result.domain is None else result.domain.axes
     indices = {axis.variable.symbol.identifier: index for index, axis in enumerate(axes)}
@@ -350,6 +386,7 @@ def _bound_export_lowerings(
             if (
                 lowering.direction == certificate.direction
                 and lowering.bound == certificate.bound
+                and lowering.strict == isinstance(certificate, ReplayableStrictBoundCertificate)
                 and checked == dict(certificate.expression)
             ):
                 match_index = index
@@ -360,6 +397,7 @@ def _bound_export_lowerings(
         selected.append(
             {
                 "rule": lowering.rule,
+                "strict": lowering.strict,
                 "lhs": lower_bridge_expression(
                     compile_semantic_expression(lowering.lhs, indices, advertised)
                 ),

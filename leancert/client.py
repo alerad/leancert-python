@@ -25,6 +25,7 @@ from .protocol import (
     BoundOperationOutcome,
     BridgeHandshake,
     EventualOperationOutcome,
+    StrictBoundOperationOutcome,
     SystemRootOperationOutcome,
 )
 
@@ -548,6 +549,36 @@ class LeanClient:
             )
         else:
             contract.parse_bound_outcome(result, expected_direction=direction)
+        return result
+
+    def check_strict_bound(
+        self,
+        expr_json: dict,
+        box_json: list[dict],
+        bound: dict,
+        relation: str,
+        taylor_depth: int = 10,
+    ) -> dict:
+        """Check ``expr < bound`` (lt) or ``bound < expr`` (gt)."""
+        if relation not in {"lt", "gt"}:
+            raise ValueError("strict-bound relation must be 'lt' or 'gt'")
+        result = self.call(
+            "check_strict_bound",
+            {
+                "expr": expr_json,
+                "box": box_json,
+                "relation": relation,
+                "bound": bound,
+                "taylorDepth": taylor_depth,
+            },
+        )
+        contract = self._bridge_contract
+        if contract is None:
+            outcome = StrictBoundOperationOutcome.parse(result, expected_relation=relation)
+        else:
+            outcome = contract.parse_strict_bound_outcome(result, expected_relation=relation)
+        if outcome.target_bound.fraction != Fraction(bound["n"], bound["d"]):
+            raise ProtocolViolation("strict-bound target contradicts the request")
         return result
 
     def integrate(

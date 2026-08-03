@@ -73,10 +73,16 @@ exact rational-polynomial equalities and fixed-partition lower or upper bounds.
 Partition discovery is untrusted; exact equality never falls back to a
 numerical enclosure.
 
+Contract 2.7 adds `check_strict_bound` and `strict-bound-check/1`. Its `lt`
+and `gt` outcomes retain both the requested target and a strictly interior
+exact rational bound. The SDK validates the relation, fixed-checker authority,
+request identity, and exact margin before accepting the evidence. The existing
+non-strict `check_bound` operation and schemas remain unchanged.
+
 The certificate families are intentionally distinct: adaptive evidence may
 close checked subdivision leaves, while `bound-check/2` and
-`krawczyk-check/1`, `eventual-bound-check/1`, `scalar-root-check/1`, and
-`integral-check/1` support standalone project
+`strict-bound-check/1`, `krawczyk-check/1`, `eventual-bound-check/1`,
+`scalar-root-check/1`, and `integral-check/1` support standalone project
 export.
 
 Golden fixtures live under

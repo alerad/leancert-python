@@ -295,6 +295,30 @@ class BridgeHandshake:
                 raise ProtocolViolation("bound verification route is absent from the handshake")
         return outcome
 
+    def parse_strict_bound_outcome(
+        self, value: Any, *, expected_relation: str
+    ) -> StrictBoundOperationOutcome:
+        capability = self.capability("check_strict_bound")
+        if capability is None:
+            raise ProtocolViolation(
+                "bridge returned a strict bound without check_strict_bound capability"
+            )
+        outcome = StrictBoundOperationOutcome.parse(value, expected_relation=expected_relation)
+        if outcome.status not in capability.outcomes:
+            raise ProtocolViolation("strict-bound status was not advertised")
+        if outcome.backend not in capability.backends:
+            raise ProtocolViolation("strict-bound backend was not advertised")
+        if outcome.certificate is not None:
+            if outcome.certificate.schema_version not in capability.certificate_schemas:
+                raise ProtocolViolation("strict-bound certificate schema was not advertised")
+            if outcome.certificate.verification_route not in capability.verification_routes:
+                raise ProtocolViolation("strict-bound verification route was not advertised")
+            if outcome.certificate.schema_version not in self.certificate_schemas:
+                raise ProtocolViolation("strict-bound certificate schema is absent from handshake")
+            if outcome.certificate.verification_route not in self.verification_routes:
+                raise ProtocolViolation("strict-bound verification route is absent from handshake")
+        return outcome
+
     def parse_adaptive_outcome(
         self, value: Any, *, expected_direction: str
     ) -> AdaptiveOperationOutcome:
@@ -711,19 +735,118 @@ class ReplayBoundPayload:
 
 
 @dataclass(frozen=True, slots=True)
+class ReplayStrictBoundPayload:
+    expression: Mapping[str, Any]
+    box: tuple[WireEnclosure, ...]
+    relation: str
+    target_bound: WireRational
+    certified_bound: WireRational
+    config: ReplayBoundConfig
+    canonical: Mapping[str, Any]
+
+    @classmethod
+    def parse(cls, value: Any) -> ReplayStrictBoundPayload:
+        obj = _object(value, "certificate.payload")
+        required = {
+            "schema_version",
+            "expression",
+            "box",
+            "relation",
+            "target_bound",
+            "certified_bound",
+            "config",
+        }
+        if set(obj) != required or obj.get("schema_version") != "checked-strict-bound/1":
+            raise ProtocolViolation("replay payload fields do not match checked-strict-bound/1")
+        expression = _canonical_core_expression(obj["expression"])
+        if not isinstance(obj["box"], list):
+            raise ProtocolViolation("certificate.payload.box must be an array")
+        box_items: list[WireEnclosure] = []
+        for index, entry in enumerate(obj["box"]):
+            item = _object(entry, f"certificate.payload.box[{index}]")
+            if set(item) != {"lo", "hi"}:
+                raise ProtocolViolation("certificate replay interval fields are not canonical")
+            box_items.append(
+                WireEnclosure(
+                    _canonical_wire_rational(item["lo"], f"certificate.payload.box[{index}].lo"),
+                    _canonical_wire_rational(item["hi"], f"certificate.payload.box[{index}].hi"),
+                )
+            )
+        box = tuple(box_items)
+        if any(item.lower.fraction > item.upper.fraction for item in box):
+            raise ProtocolViolation("certificate replay box has inverted endpoints")
+        relation = _string(obj["relation"], "certificate.payload.relation")
+        if relation not in {"lt", "gt"}:
+            raise ProtocolViolation("certificate.payload.relation must be lt or gt")
+        target = _canonical_wire_rational(obj["target_bound"], "certificate.payload.target_bound")
+        certified = _canonical_wire_rational(
+            obj["certified_bound"], "certificate.payload.certified_bound"
+        )
+        if relation == "lt" and not certified.fraction < target.fraction:
+            raise ProtocolViolation("strict upper certificate has no exact interior margin")
+        if relation == "gt" and not target.fraction < certified.fraction:
+            raise ProtocolViolation("strict lower certificate has no exact interior margin")
+        config_obj = _object(obj["config"], "certificate.payload.config")
+        if set(config_obj) != {"max_iterations", "tolerance", "use_monotonicity", "taylor_depth"}:
+            raise ProtocolViolation("replay configuration fields are not canonical")
+        maximum, depth = config_obj["max_iterations"], config_obj["taylor_depth"]
+        monotonicity = config_obj["use_monotonicity"]
+        if any(
+            isinstance(item, bool) or not isinstance(item, int) or item < 0
+            for item in (maximum, depth)
+        ):
+            raise ProtocolViolation("replay iteration and Taylor limits must be natural numbers")
+        if not isinstance(monotonicity, bool):
+            raise ProtocolViolation("replay use_monotonicity must be boolean")
+        tolerance = _canonical_wire_rational(
+            config_obj["tolerance"], "certificate.payload.config.tolerance"
+        )
+        config = ReplayBoundConfig(maximum, tolerance, monotonicity, depth)
+        canonical = {
+            "schema_version": "checked-strict-bound/1",
+            "expression": expression,
+            "box": [
+                {
+                    "lo": {"n": item.lower.numerator, "d": item.lower.denominator},
+                    "hi": {"n": item.upper.numerator, "d": item.upper.denominator},
+                }
+                for item in box
+            ],
+            "relation": relation,
+            "target_bound": {"n": target.numerator, "d": target.denominator},
+            "certified_bound": {"n": certified.numerator, "d": certified.denominator},
+            "config": {
+                "max_iterations": maximum,
+                "tolerance": {"n": tolerance.numerator, "d": tolerance.denominator},
+                "use_monotonicity": monotonicity,
+                "taylor_depth": depth,
+            },
+        }
+        frozen = _freeze_json(canonical)
+        return cls(frozen["expression"], box, relation, target, certified, config, frozen)
+
+    @property
+    def digest(self) -> str:
+        encoded = json.dumps(
+            _plain_json(self.canonical), sort_keys=True, separators=(",", ":")
+        ).encode()
+        return "sha256:" + hashlib.sha256(encoded).hexdigest()
+
+
+@dataclass(frozen=True, slots=True)
 class CertificateDescriptor:
     schema_version: str
     checker: str
     verifier: str
     verification_route: str
-    payload: ReplayBoundPayload | None = None
+    payload: ReplayBoundPayload | ReplayStrictBoundPayload | None = None
 
     @classmethod
     def parse(cls, value: Any) -> CertificateDescriptor:
         obj = _object(value, "certificate")
         schema_version = _string(obj.get("schema_version"), "certificate.schema_version")
         required = {"schema_version", "checker", "verifier", "verification_route"}
-        if schema_version == "bound-check/2":
+        if schema_version in {"bound-check/2", "strict-bound-check/1"}:
             required.add("payload")
         if set(obj) != required:
             raise ProtocolViolation("certificate descriptor fields do not match its schema")
@@ -737,7 +860,13 @@ class CertificateDescriptor:
             checker=checker,
             verifier=verifier,
             verification_route=route,
-            payload=(ReplayBoundPayload.parse(obj["payload"]) if "payload" in obj else None),
+            payload=(
+                ReplayStrictBoundPayload.parse(obj["payload"])
+                if schema_version == "strict-bound-check/1"
+                else ReplayBoundPayload.parse(obj["payload"])
+                if "payload" in obj
+                else None
+            ),
         )
 
 
@@ -812,6 +941,99 @@ class BoundOperationOutcome:
         ):
             raise ProtocolViolation("replay payload direction contradicts bound outcome")
         return cls(status, direction, enclosure, backend, certificate, MappingProxyType(dict(obj)))
+
+
+@dataclass(frozen=True, slots=True)
+class StrictBoundOperationOutcome:
+    status: OutcomeStatus
+    relation: str
+    target_bound: WireRational
+    certified_bound: WireRational
+    enclosure: WireEnclosure
+    backend: str
+    certificate: CertificateDescriptor | None
+    raw: Mapping[str, Any]
+
+    @classmethod
+    def parse(
+        cls, value: Any, *, expected_relation: str | None = None
+    ) -> StrictBoundOperationOutcome:
+        obj = _object(value, "check_strict_bound result")
+        required = {
+            "verified",
+            "status",
+            "relation",
+            "target_bound",
+            "certified_bound",
+            "enclosure",
+            "backend",
+            "certificate",
+        }
+        if set(obj) != required:
+            raise ProtocolViolation("strict-bound outcome fields are not canonical")
+        if not isinstance(obj["verified"], bool):
+            raise ProtocolViolation("check_strict_bound.verified must be boolean")
+        try:
+            status = OutcomeStatus(obj["status"])
+        except (TypeError, ValueError) as exc:
+            raise ProtocolViolation("check_strict_bound.status is unknown") from exc
+        relation = _string(obj["relation"], "check_strict_bound.relation")
+        if relation not in {"lt", "gt"}:
+            raise ProtocolViolation("check_strict_bound.relation must be lt or gt")
+        if expected_relation is not None and relation != expected_relation:
+            raise ProtocolViolation("check_strict_bound relation contradicts the request")
+        target = _canonical_wire_rational(obj["target_bound"], "target_bound")
+        certified = _canonical_wire_rational(obj["certified_bound"], "certified_bound")
+        enclosure = WireEnclosure.parse(obj["enclosure"])
+        if enclosure.lower.fraction > enclosure.upper.fraction:
+            raise ProtocolViolation("strict-bound enclosure has inverted endpoints")
+        if relation == "lt" and certified != enclosure.upper:
+            raise ProtocolViolation("strict upper certified bound must equal enclosure upper")
+        if relation == "gt" and certified != enclosure.lower:
+            raise ProtocolViolation("strict lower certified bound must equal enclosure lower")
+        backend = _string(obj["backend"], "check_strict_bound.backend")
+        assert backend is not None
+        certificate = (
+            None if obj["certificate"] is None else CertificateDescriptor.parse(obj["certificate"])
+        )
+        if obj["verified"] != (status is OutcomeStatus.VERIFIED):
+            raise ProtocolViolation("strict-bound verified flag contradicts status")
+        if (status is OutcomeStatus.VERIFIED) != (certificate is not None):
+            raise ProtocolViolation("only verified strict bounds may retain a certificate")
+        if certificate is not None:
+            if certificate.schema_version != "strict-bound-check/1":
+                raise ProtocolViolation("strict-bound certificate has the wrong schema")
+            payload = certificate.payload
+            if not isinstance(payload, ReplayStrictBoundPayload):
+                raise ProtocolViolation("strict-bound certificate lacks a replay payload")
+            if (
+                payload.relation != relation
+                or payload.target_bound != target
+                or payload.certified_bound != certified
+            ):
+                raise ProtocolViolation("strict-bound certificate contradicts its outcome")
+            expected_checker = (
+                "LeanCert.Validity.GlobalOpt.checkGlobalUpperBound"
+                if relation == "lt"
+                else "LeanCert.Validity.GlobalOpt.checkGlobalLowerBound"
+            )
+            expected_verifier = (
+                "LeanCert.Validity.GlobalOpt.verify_global_upper_bound"
+                if relation == "lt"
+                else "LeanCert.Validity.GlobalOpt.verify_global_lower_bound"
+            )
+            if certificate.checker != expected_checker or certificate.verifier != expected_verifier:
+                raise ProtocolViolation("strict-bound certificate authority is inconsistent")
+        return cls(
+            status,
+            relation,
+            target,
+            certified,
+            enclosure,
+            backend,
+            certificate,
+            MappingProxyType(dict(obj)),
+        )
 
 
 @dataclass(frozen=True, slots=True)
