@@ -34,6 +34,7 @@ from .result import (
     VerifiedEventualBound,
     VerifiedIntegralBound,
     VerifiedIntegralEquality,
+    VerifiedRegisteredEnclosure,
     VerifiedRootExclusion,
     VerifiedRootExistence,
     VerifiedSystemRoot,
@@ -571,6 +572,10 @@ def export_verified_conjunction(
             "conjunction export does not yet compose exact-normalizer children into Lean evidence"
         )
     children = result.children
+    if any(isinstance(child, VerifiedRegisteredEnclosure) for child in children):
+        return ExportUnsupported(
+            "registered enclosure conjunctions require their downstream Lean modules"
+        )
     if not children or any(not isinstance(child, Verified) for child in children):
         return ExportUnsupported(
             "conjunction export currently supports checked bound children only"

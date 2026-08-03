@@ -10,7 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from fractions import Fraction
 from types import MappingProxyType
@@ -86,13 +86,23 @@ class OperationCapability:
     result_schema: str | None = None
     certificate_schemas: frozenset[str] = frozenset()
     verification_routes: frozenset[str] = frozenset()
+    details: Mapping[str, Any] = field(
+        default_factory=lambda: MappingProxyType({}), compare=False, hash=False, repr=False
+    )
 
     @classmethod
     def parse(cls, operation: str, value: Any) -> OperationCapability:
         obj = _object(value, f"capabilities.{operation}")
         schema = _string(obj.get("schema_version"), f"capabilities.{operation}.schema_version")
+        is_replay_service = operation == "replay_registered_enclosure"
+        is_registered_enclosure = operation in {
+            "check_registered_enclosure",
+            "replay_registered_enclosure",
+        }
         raw_outcomes = _string_set(
-            obj.get("outcomes"), f"capabilities.{operation}.outcomes", required=True
+            obj.get("outcomes"),
+            f"capabilities.{operation}.outcomes",
+            required=not is_replay_service,
         )
         try:
             outcomes = frozenset(OutcomeStatus(item) for item in raw_outcomes)
@@ -101,9 +111,15 @@ class OperationCapability:
                 f"capabilities.{operation}.outcomes contains an unknown outcome"
             ) from exc
         backends = _string_set(
-            obj.get("backends"), f"capabilities.{operation}.backends", required=True
+            obj.get("backends"),
+            f"capabilities.{operation}.backends",
+            required=not is_registered_enclosure,
         )
-        if OutcomeStatus.VERIFIED not in outcomes or not backends:
+        if not is_replay_service and OutcomeStatus.VERIFIED not in outcomes:
+            raise ProtocolViolation(
+                f"capabilities.{operation} must advertise the verified outcome"
+            )
+        if not is_registered_enclosure and not backends:
             raise ProtocolViolation(
                 f"capabilities.{operation} must advertise verified and at least one backend"
             )
@@ -137,7 +153,82 @@ class OperationCapability:
             result_schema,
             certificate_schemas,
             verification_routes,
+            _freeze_json(obj),
         )
+
+
+@dataclass(frozen=True, slots=True)
+class RegisteredEnclosureRule:
+    function: str
+    candidate: str
+    checker: str
+    theorem: str
+    priority: int
+
+    @classmethod
+    def parse(cls, value: Any, name: str) -> RegisteredEnclosureRule:
+        obj = _object(value, name)
+        required = {"function", "candidate", "checker", "theorem", "priority"}
+        if set(obj) != required:
+            raise ProtocolViolation(f"{name} fields do not match Contract 2.8")
+        strings = tuple(
+            _string(obj[field], f"{name}.{field}")
+            for field in ("function", "candidate", "checker", "theorem")
+        )
+        priority = obj["priority"]
+        if isinstance(priority, bool) or not isinstance(priority, int) or priority < 0:
+            raise ProtocolViolation(f"{name}.priority must be a non-negative integer")
+        assert all(strings)
+        return cls(*strings, priority)
+
+
+@dataclass(frozen=True, slots=True)
+class EnclosureProfileIdentity:
+    schema_version: str
+    name: str
+    modules: tuple[str, ...]
+    allowed_functions: tuple[str, ...]
+    leancert_revision: str
+    environment_digest: str
+    registry: tuple[RegisteredEnclosureRule, ...]
+    path: str | None = None
+
+    @classmethod
+    def parse(cls, value: Any) -> EnclosureProfileIdentity:
+        obj = _object(value, "enclosure_profile")
+        required = {
+            "schema_version", "name", "path", "modules", "allowed_functions",
+            "leancert_revision", "environment_digest", "registry",
+        }
+        if set(obj) != required:
+            raise ProtocolViolation("enclosure_profile fields do not match Contract 2.8")
+        if obj["schema_version"] != "leancert-enclosure-profile/1":
+            raise ProtocolViolation("unsupported enclosure profile schema")
+        _string_set(obj["modules"], "enclosure_profile.modules", required=True)
+        _string_set(
+            obj["allowed_functions"],
+            "enclosure_profile.allowed_functions",
+            required=True,
+        )
+        # Preserve the Bridge's deterministic order rather than frozenset order.
+        modules = tuple(obj["modules"])
+        allowed = tuple(obj["allowed_functions"])
+        raw_registry = obj["registry"]
+        if not isinstance(raw_registry, list):
+            raise ProtocolViolation("enclosure_profile.registry must be an array")
+        registry = tuple(
+            RegisteredEnclosureRule.parse(item, f"enclosure_profile.registry[{index}]")
+            for index, item in enumerate(raw_registry)
+        )
+        functions = tuple(rule.function for rule in registry)
+        if not set(allowed).issubset(functions) or not set(functions).issubset(allowed):
+            raise ProtocolViolation("enclosure registry must resolve only allowlisted functions")
+        path = _string(obj["path"], "enclosure_profile.path", optional=obj["path"] is None)
+        name = _string(obj["name"], "enclosure_profile.name")
+        revision = _string(obj["leancert_revision"], "enclosure_profile.leancert_revision")
+        digest = _string(obj["environment_digest"], "enclosure_profile.environment_digest")
+        assert name and revision and digest
+        return cls(obj["schema_version"], name, modules, allowed, revision, digest, registry, path)
 
 
 @dataclass(frozen=True, slots=True)
@@ -222,6 +313,7 @@ class BridgeHandshake:
     framing: str | None = None
     build: BuildProvenance | None = None
     dependencies: ResolvedDependencies | None = None
+    enclosure_profile: EnclosureProfileIdentity | None = None
 
     @property
     def typed_contract(self) -> bool:
@@ -242,6 +334,28 @@ class BridgeHandshake:
         """Stable identity for the negotiated semantic capability set."""
         payload = {
             "protocol_version": str(self.protocol_version),
+            "enclosure_profile": (
+                None
+                if self.enclosure_profile is None
+                else {
+                    "schema_version": self.enclosure_profile.schema_version,
+                    "name": self.enclosure_profile.name,
+                    "modules": list(self.enclosure_profile.modules),
+                    "allowed_functions": list(self.enclosure_profile.allowed_functions),
+                    "leancert_revision": self.enclosure_profile.leancert_revision,
+                    "environment_digest": self.enclosure_profile.environment_digest,
+                    "registry": [
+                        {
+                            "function": rule.function,
+                            "candidate": rule.candidate,
+                            "checker": rule.checker,
+                            "theorem": rule.theorem,
+                            "priority": rule.priority,
+                        }
+                        for rule in self.enclosure_profile.registry
+                    ],
+                }
+            ),
             "operations": sorted(self.operations),
             "expression_nodes": sorted(self.expression_nodes),
             "certificate_schemas": sorted(self.certificate_schemas),
@@ -472,6 +586,11 @@ class BridgeHandshake:
             if api >= ProtocolVersion(2, 1, 0)
             else None
         )
+        enclosure_profile = (
+            None
+            if obj.get("enclosure_profile") is None
+            else EnclosureProfileIdentity.parse(obj.get("enclosure_profile"))
+        )
         raw_capabilities = obj.get("capabilities")
         if raw_capabilities is None and not typed:
             capability_items: tuple[OperationCapability, ...] = ()
@@ -519,6 +638,7 @@ class BridgeHandshake:
             framing,
             build,
             dependencies,
+            enclosure_profile,
         )
 
 
