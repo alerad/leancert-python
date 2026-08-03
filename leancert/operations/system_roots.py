@@ -46,6 +46,8 @@ def _common(
         "domain": plan.claim.domain,
         "provenance": provenance,
         "search": search,
+        "requested_uniqueness": plan.claim.uniqueness,
+        "established_uniqueness": False,
         "original_claim": original_claim,
         "normalized_claim": normalized_claim,
         "claim_id": claim_id,
@@ -112,8 +114,7 @@ def execute_system_root_plan(
         )
 
     indices = {
-        variable.symbol.identifier: index
-        for index, variable in enumerate(plan.claim.variables)
+        variable.symbol.identifier: index for index, variable in enumerate(plan.claim.variables)
     }
     try:
         system_json = [
@@ -149,9 +150,7 @@ def execute_system_root_plan(
             provenance=provenance,
         )
 
-    if config.candidate is not None and len(config.candidate.center) != len(
-        plan.claim.variables
-    ):
+    if config.candidate is not None and len(config.candidate.center) != len(plan.claim.variables):
         raise ValueError("Krawczyk candidate dimension must match the system")
 
     response = client.check_unique_system_root(
@@ -193,8 +192,7 @@ def execute_system_root_plan(
             payload_digest=payload.digest,
             system=payload.system,
             box=tuple(
-                ResultInterval(item.lower.fraction, item.upper.fraction)
-                for item in payload.box
+                ResultInterval(item.lower.fraction, item.upper.fraction) for item in payload.box
             ),
             center=tuple(item.fraction for item in payload.center),
             preconditioner=tuple(
@@ -203,6 +201,7 @@ def execute_system_root_plan(
             taylor_depth=payload.taylor_depth,
             canonical_payload=payload.canonical,
         )
+        common["established_uniqueness"] = True
         return VerifiedSystemRoot(**common, certificate=certificate)
     if outcome.status is OutcomeStatus.UNSUPPORTED:
         return UnsupportedSystemRoot(

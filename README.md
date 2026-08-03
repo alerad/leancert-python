@@ -71,6 +71,15 @@ two_sided = lc.prove(
     where={x: (0, 1)},
 )
 
+# Compare two expressions directly; export retains this original theorem.
+comparison = lc.prove(ast.sin(x) <= x, where={x: (0, 1)})
+
+# Independent conjunction children are routed and retained separately.
+combined = lc.prove(
+    ast.all_of(x**2 <= 1, ast.sin(x) <= 1),
+    where={x: (-1, 1)},
+)
+
 # Discover and certify a cutoff for every n at or beyond it.
 from fractions import Fraction
 n = ast.var("n", sort=ast.NATURAL)

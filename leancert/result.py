@@ -25,9 +25,68 @@ class ProofResult:
     """Marker base for every typed outcome returned by :func:`leancert.prove`."""
 
     def __bool__(self) -> bool:
-        raise TypeError(
-            "Proof outcomes have no truth value; inspect their concrete result type"
-        )
+        raise TypeError("Proof outcomes have no truth value; inspect their concrete result type")
+
+
+@dataclass(frozen=True)
+class ExactLogicalResult(ProofResult):
+    """A claim decided by exact SDK normalization, outside Bridge authority."""
+
+    original_claim: Any
+    normalized_claim: Any
+    claim_id: Any
+    authority: Literal["python_exact_normalizer"] = "python_exact_normalizer"
+
+
+@dataclass(frozen=True)
+class NormalizedTrue(ExactLogicalResult):
+    """Exact normalization reduced the claim to ``TrueClaim``."""
+
+
+@dataclass(frozen=True)
+class NormalizedFalse(ExactLogicalResult):
+    """Exact normalization reduced the claim to ``FalseClaim``."""
+
+
+@dataclass(frozen=True)
+class ConjunctionResult(ProofResult):
+    """Child-preserving result for a recursively routed conjunction."""
+
+    children: tuple[ProofResult, ...]
+    original_claim: Any
+    normalized_claim: Any
+    claim_id: Any
+
+
+@dataclass(frozen=True)
+class VerifiedConjunction(ConjunctionResult):
+    """Every non-trivial child has checked evidence; exact children are labeled."""
+
+    def export_lean_project(self, path: str, *, verify: bool = True):
+        from .export import export_verified_conjunction
+
+        return export_verified_conjunction(self, path, verify=verify)
+
+
+@dataclass(frozen=True)
+class IncompleteConjunction(ConjunctionResult):
+    """At least one conjunction child was not established."""
+
+
+@dataclass(frozen=True)
+class BoundComparisonLowering:
+    """Proof-relevant record of a semantic comparison lowered to a bound check."""
+
+    lhs: Any
+    rhs: Any
+    checked_expression: Any
+    direction: Literal["lower", "upper"]
+    bound: Fraction
+    rule: Literal[
+        "lhs_le_constant",
+        "constant_le_rhs",
+        "subtract_rhs_le_zero",
+    ]
 
 
 @dataclass(frozen=True)
@@ -128,7 +187,10 @@ class BoundCheckEvidence:
     requested_bound: Fraction
     enclosure: Interval
     status: Literal[
-        "verified", "inconclusive", "rejected", "unsupported",
+        "verified",
+        "inconclusive",
+        "rejected",
+        "unsupported",
         "domain_obstruction",
     ]
     operation: str
@@ -162,6 +224,7 @@ class BoundCheck(ProofResult):
     upper: Optional[Fraction]
     checks: tuple[BoundCheckEvidence, ...]
     provenance: BridgeProvenance
+    lowerings: tuple[BoundComparisonLowering, ...] = field(default=(), kw_only=True)
     original_claim: Any | None = field(default=None, kw_only=True)
     normalized_claim: Any | None = field(default=None, kw_only=True)
     claim_id: Any | None = field(default=None, kw_only=True)
@@ -197,6 +260,7 @@ class Rejected(BoundCheck):
     """A checked point enclosure proves that a requested bound is false."""
 
     counterexample: CheckedCounterexample
+    refutation_check: BoundCheckEvidence | None = field(default=None, kw_only=True)
 
 
 @dataclass(frozen=True)
@@ -253,6 +317,8 @@ class SystemRootResult(ProofResult):
     domain: Any
     provenance: BridgeProvenance
     search: KrawczykSearchEvidence
+    requested_uniqueness: bool = field(default=True, kw_only=True)
+    established_uniqueness: bool = field(default=False, kw_only=True)
     original_claim: Any | None = field(default=None, kw_only=True)
     normalized_claim: Any | None = field(default=None, kw_only=True)
     claim_id: Any | None = field(default=None, kw_only=True)
@@ -352,6 +418,7 @@ class InconclusiveEventualBound(EventualBoundResult):
 class UnsupportedEventualBound(EventualBoundResult):
     reason: str
 
+
 @dataclass
 class Certificate:
     """
@@ -360,6 +427,7 @@ class Certificate:
     Certificates contain all the information needed to reproduce
     and verify a computation.
     """
+
     operation: str
     expr_json: dict[str, Any]
     domain_json: list[dict[str, Any]]
@@ -373,20 +441,20 @@ class Certificate:
     def to_dict(self) -> dict[str, Any]:
         """Convert to JSON-serializable dictionary."""
         return {
-            'operation': self.operation,
-            'expr': self.expr_json,
-            'domain': self.domain_json,
-            'result': self.result_json,
-            'verified': self.verified,
-            'lean_version': self.lean_version,
-            'leancert_version': self.leancert_version,
-            'computation_time_ms': self.computation_time_ms,
-            'metadata': self.metadata,
+            "operation": self.operation,
+            "expr": self.expr_json,
+            "domain": self.domain_json,
+            "result": self.result_json,
+            "verified": self.verified,
+            "lean_version": self.lean_version,
+            "leancert_version": self.leancert_version,
+            "computation_time_ms": self.computation_time_ms,
+            "metadata": self.metadata,
         }
 
     def save(self, path: str) -> None:
         """Save certificate to a JSON file."""
-        with open(path, 'w') as f:
+        with open(path, "w") as f:
             json.dump(self.to_dict(), f, indent=2)
 
     @classmethod
@@ -396,15 +464,15 @@ class Certificate:
             data = json.load(f)
 
         return cls(
-            operation=data['operation'],
-            expr_json=data['expr'],
-            domain_json=data['domain'],
-            result_json=data['result'],
-            verified=data['verified'],
-            lean_version=data['lean_version'],
-            leancert_version=data['leancert_version'],
-            computation_time_ms=data.get('computation_time_ms'),
-            metadata=data.get('metadata', {}),
+            operation=data["operation"],
+            expr_json=data["expr"],
+            domain_json=data["domain"],
+            result_json=data["result"],
+            verified=data["verified"],
+            lean_version=data["lean_version"],
+            leancert_version=data["leancert_version"],
+            computation_time_ms=data.get("computation_time_ms"),
+            metadata=data.get("metadata", {}),
         )
 
     def hash(self) -> str:
@@ -444,29 +512,29 @@ class Certificate:
         lines.append(f"-- Generated from: {self.operation}")
         lines.append("")
 
-        if self.operation == 'find_bounds':
+        if self.operation == "find_bounds":
             lines.extend(self._to_lean_find_bounds())
-        elif self.operation == 'verify_bound':
+        elif self.operation == "verify_bound":
             lines.extend(self._to_lean_verify_bound())
-        elif self.operation == 'find_roots':
+        elif self.operation == "find_roots":
             lines.extend(self._to_lean_find_roots())
-        elif self.operation == 'integrate':
+        elif self.operation == "integrate":
             lines.extend(self._to_lean_integrate())
         else:
             lines.append(f"-- Unknown operation: {self.operation}")
             lines.append(f"-- Raw result: {self.result_json}")
 
-        return '\n'.join(lines)
+        return "\n".join(lines)
 
     def _to_lean_find_bounds(self) -> list[str]:
         """Generate Lean code for find_bounds operation."""
         lines = []
         expr_lean = self._expr_to_lean(self.expr_json)
-        min_lo = self.result_json.get('min', {}).get('lo', {})
-        min_hi = self.result_json.get('min', {}).get('hi', {})
-        max_lo = self.result_json.get('max', {}).get('lo', {})
-        max_hi = self.result_json.get('max', {}).get('hi', {})
-        taylor_depth = self.metadata.get('taylor_depth', 10)
+        min_lo = self.result_json.get("min", {}).get("lo", {})
+        min_hi = self.result_json.get("min", {}).get("hi", {})
+        max_lo = self.result_json.get("max", {}).get("lo", {})
+        max_hi = self.result_json.get("max", {}).get("hi", {})
+        taylor_depth = self.metadata.get("taylor_depth", 10)
 
         is_multivariate = len(self.domain_json) > 1
 
@@ -475,8 +543,12 @@ class Certificate:
         lines.append("")
         # Show full intervals so users see both the proven bound and the tight estimate
         # min_lo is the proven lower bound, min_hi is the tight upper estimate of the minimum
-        lines.append(f"-- Min ∈ [{self._rat_to_float(min_lo):.6f}, {self._rat_to_float(min_hi):.6f}]")
-        lines.append(f"-- Max ∈ [{self._rat_to_float(max_lo):.6f}, {self._rat_to_float(max_hi):.6f}]")
+        lines.append(
+            f"-- Min ∈ [{self._rat_to_float(min_lo):.6f}, {self._rat_to_float(min_hi):.6f}]"
+        )
+        lines.append(
+            f"-- Max ∈ [{self._rat_to_float(max_lo):.6f}, {self._rat_to_float(max_hi):.6f}]"
+        )
         lines.append("")
         lines.append("theorem bounds_check :")
 
@@ -484,11 +556,15 @@ class Certificate:
             # Generate proper nested forall syntax for multivariate
             quantifiers = self._domain_to_lean_quantifiers(self.domain_json)
             lines.append(f"    {quantifiers}")
-            lines.append(f"    {self._rat_to_float(min_lo):.6f} ≤ {expr_lean} ∧ {expr_lean} ≤ {self._rat_to_float(max_hi):.6f} := by")
+            lines.append(
+                f"    {self._rat_to_float(min_lo):.6f} ≤ {expr_lean} ∧ {expr_lean} ≤ {self._rat_to_float(max_hi):.6f} := by"
+            )
             lines.append(f"  multivariate_bound")
         else:
             domain_lean = self._domain_to_lean(self.domain_json)
-            lines.append(f"    ∀ x ∈ {domain_lean}, {self._rat_to_float(min_lo):.6f} ≤ {expr_lean} ∧ {expr_lean} ≤ {self._rat_to_float(max_hi):.6f} := by")
+            lines.append(
+                f"    ∀ x ∈ {domain_lean}, {self._rat_to_float(min_lo):.6f} ≤ {expr_lean} ∧ {expr_lean} ≤ {self._rat_to_float(max_hi):.6f} := by"
+            )
             lines.append(f"  interval_bound {taylor_depth}")
 
         return lines
@@ -498,19 +574,23 @@ class Certificate:
         lines = []
         expr_lean = self._expr_to_lean(self.expr_json)
         domain_lean = self._domain_to_lean(self.domain_json)
-        taylor_depth = self.metadata.get('taylor_depth', 10)
+        taylor_depth = self.metadata.get("taylor_depth", 10)
 
-        bound_type = self.result_json.get('bound_type', 'unknown')
-        bound_value = self.result_json.get('bound_value', 0)
+        bound_type = self.result_json.get("bound_type", "unknown")
+        bound_value = self.result_json.get("bound_value", 0)
 
         lines.append(f"-- Expression: {expr_lean}")
         lines.append(f"-- Domain: {domain_lean}")
         lines.append("")
 
-        if bound_type == 'upper':
-            lines.append(f"theorem upper_bound_check : ∀ x ∈ {domain_lean}, {expr_lean} ≤ {bound_value} := by")
-        elif bound_type == 'lower':
-            lines.append(f"theorem lower_bound_check : ∀ x ∈ {domain_lean}, {bound_value} ≤ {expr_lean} := by")
+        if bound_type == "upper":
+            lines.append(
+                f"theorem upper_bound_check : ∀ x ∈ {domain_lean}, {expr_lean} ≤ {bound_value} := by"
+            )
+        elif bound_type == "lower":
+            lines.append(
+                f"theorem lower_bound_check : ∀ x ∈ {domain_lean}, {bound_value} ≤ {expr_lean} := by"
+            )
         else:
             lines.append(f"theorem bound_check : ∀ x ∈ {domain_lean}, ... := by")
 
@@ -528,12 +608,12 @@ class Certificate:
         lines.append("")
         lines.append("-- Roots found:")
 
-        roots = self.result_json.get('roots', [])
+        roots = self.result_json.get("roots", [])
         for i, root in enumerate(roots):
-            lo = self._rat_to_float(root.get('lo', {}))
-            hi = self._rat_to_float(root.get('hi', {}))
-            status = root.get('status', 'unknown')
-            lines.append(f"-- Root {i+1}: [{lo:.6f}, {hi:.6f}] (status: {status})")
+            lo = self._rat_to_float(root.get("lo", {}))
+            hi = self._rat_to_float(root.get("hi", {}))
+            status = root.get("status", "unknown")
+            lines.append(f"-- Root {i + 1}: [{lo:.6f}, {hi:.6f}] (status: {status})")
 
         lines.append("")
         lines.append("-- To verify existence, use:")
@@ -546,12 +626,14 @@ class Certificate:
         """Generate Lean code for integrate operation."""
         lines = []
         expr_lean = self._expr_to_lean(self.expr_json)
-        lo = self.result_json.get('lo', {})
-        hi = self.result_json.get('hi', {})
-        taylor_depth = self.metadata.get('taylor_depth', 10)
+        lo = self.result_json.get("lo", {})
+        hi = self.result_json.get("hi", {})
+        taylor_depth = self.metadata.get("taylor_depth", 10)
 
         lines.append(f"-- Expression: {expr_lean}")
-        lines.append(f"-- Integral bounds: [{self._rat_to_float(lo):.6f}, {self._rat_to_float(hi):.6f}]")
+        lines.append(
+            f"-- Integral bounds: [{self._rat_to_float(lo):.6f}, {self._rat_to_float(hi):.6f}]"
+        )
         lines.append("")
         lines.append(f"-- theorem integral_bound : ∫ x in I, {expr_lean} ∈ bounds := by")
         lines.append(f"--   interval_integrate {taylor_depth}")
@@ -560,38 +642,51 @@ class Certificate:
 
     def _expr_to_lean(self, expr: dict) -> str:
         """Convert expression JSON to Lean syntax (approximate)."""
-        kind = expr.get('kind', '')
+        kind = expr.get("kind", "")
 
-        if kind == 'const':
-            val = expr.get('val', {})
-            n, d = val.get('n', 0), val.get('d', 1)
+        if kind == "const":
+            val = expr.get("val", {})
+            n, d = val.get("n", 0), val.get("d", 1)
             if d == 1:
                 return str(n)
             return f"({n}/{d})"
-        elif kind == 'var':
-            idx = expr.get('idx', 0)
+        elif kind == "var":
+            idx = expr.get("idx", 0)
             return f"x{idx}" if idx > 0 else "x"
-        elif kind == 'add':
-            e1 = self._expr_to_lean(expr.get('e1', {}))
-            e2 = self._expr_to_lean(expr.get('e2', {}))
+        elif kind == "add":
+            e1 = self._expr_to_lean(expr.get("e1", {}))
+            e2 = self._expr_to_lean(expr.get("e2", {}))
             return f"({e1} + {e2})"
-        elif kind == 'mul':
-            e1 = self._expr_to_lean(expr.get('e1', {}))
-            e2 = self._expr_to_lean(expr.get('e2', {}))
+        elif kind == "mul":
+            e1 = self._expr_to_lean(expr.get("e1", {}))
+            e2 = self._expr_to_lean(expr.get("e2", {}))
             return f"({e1} * {e2})"
-        elif kind == 'neg':
-            e = self._expr_to_lean(expr.get('e', {}))
+        elif kind == "neg":
+            e = self._expr_to_lean(expr.get("e", {}))
             return f"(-{e})"
-        elif kind == 'div':
-            e1 = self._expr_to_lean(expr.get('e1', {}))
-            e2 = self._expr_to_lean(expr.get('e2', {}))
+        elif kind == "div":
+            e1 = self._expr_to_lean(expr.get("e1", {}))
+            e2 = self._expr_to_lean(expr.get("e2", {}))
             return f"({e1} / {e2})"
-        elif kind == 'pow':
-            base = self._expr_to_lean(expr.get('base', {}))
-            exp = expr.get('exp', 0)
+        elif kind == "pow":
+            base = self._expr_to_lean(expr.get("base", {}))
+            exp = expr.get("exp", 0)
             return f"({base}^{exp})"
-        elif kind in ('sin', 'cos', 'exp', 'log', 'sqrt', 'tan', 'atan', 'inv', 'arsinh', 'atanh', 'sinc', 'erf'):
-            e = self._expr_to_lean(expr.get('e', {}))
+        elif kind in (
+            "sin",
+            "cos",
+            "exp",
+            "log",
+            "sqrt",
+            "tan",
+            "atan",
+            "inv",
+            "arsinh",
+            "atanh",
+            "sinc",
+            "erf",
+        ):
+            e = self._expr_to_lean(expr.get("e", {}))
             return f"Real.{kind} {e}"
         else:
             return f"<{kind}?>"
@@ -599,27 +694,27 @@ class Certificate:
     def _domain_to_lean(self, domain: list) -> str:
         """Convert domain JSON to Lean syntax for single variable."""
         if len(domain) == 1:
-            lo = self._rat_to_float(domain[0].get('lo', {}))
-            hi = self._rat_to_float(domain[0].get('hi', {}))
+            lo = self._rat_to_float(domain[0].get("lo", {}))
+            hi = self._rat_to_float(domain[0].get("hi", {}))
             return f"Set.Icc {lo} {hi}"
         else:
             # For multivariate, use first interval (caller should use _domain_to_lean_quantifiers)
-            lo = self._rat_to_float(domain[0].get('lo', {}))
-            hi = self._rat_to_float(domain[0].get('hi', {}))
+            lo = self._rat_to_float(domain[0].get("lo", {}))
+            hi = self._rat_to_float(domain[0].get("hi", {}))
             return f"Set.Icc {lo} {hi}"
 
     def _domain_to_lean_comment(self, domain: list) -> str:
         """Convert domain JSON to human-readable comment format."""
         if len(domain) == 1:
-            lo = self._rat_to_float(domain[0].get('lo', {}))
-            hi = self._rat_to_float(domain[0].get('hi', {}))
+            lo = self._rat_to_float(domain[0].get("lo", {}))
+            hi = self._rat_to_float(domain[0].get("hi", {}))
             return f"Set.Icc {lo} {hi}"
         else:
             intervals = []
             var_names = self._get_var_names(len(domain))
             for i, d in enumerate(domain):
-                lo = self._rat_to_float(d.get('lo', {}))
-                hi = self._rat_to_float(d.get('hi', {}))
+                lo = self._rat_to_float(d.get("lo", {}))
+                hi = self._rat_to_float(d.get("hi", {}))
                 intervals.append(f"{var_names[i]} ∈ [{lo}, {hi}]")
             return " × ".join(intervals)
 
@@ -628,26 +723,26 @@ class Certificate:
         var_names = self._get_var_names(len(domain))
         parts = []
         for i, d in enumerate(domain):
-            lo = self._rat_to_float(d.get('lo', {}))
-            hi = self._rat_to_float(d.get('hi', {}))
+            lo = self._rat_to_float(d.get("lo", {}))
+            hi = self._rat_to_float(d.get("hi", {}))
             parts.append(f"∀ {var_names[i]} ∈ Set.Icc {lo} {hi},")
         return " ".join(parts)
 
     def _get_var_names(self, count: int) -> list[str]:
         """Get variable names for the given count."""
         if count == 1:
-            return ['x']
+            return ["x"]
         elif count == 2:
-            return ['x', 'y']
+            return ["x", "y"]
         elif count == 3:
-            return ['x', 'y', 'z']
+            return ["x", "y", "z"]
         else:
-            return [f'x{i}' for i in range(count)]
+            return [f"x{i}" for i in range(count)]
 
     def _rat_to_float(self, rat: dict) -> float:
         """Convert rational JSON to float."""
-        n = rat.get('n', 0)
-        d = rat.get('d', 1)
+        n = rat.get("n", 0)
+        d = rat.get("d", 1)
         return n / d if d != 0 else 0.0
 
     def __repr__(self) -> str:
@@ -682,6 +777,7 @@ class BoundsResult:
         result.min_value  # midpoint of min_bound (approximate)
         result.max_value  # midpoint of max_bound (approximate)
     """
+
     min_bound: Interval
     max_bound: Interval
     verified: bool
@@ -750,6 +846,7 @@ class RootInterval:
         root.value          # float midpoint (approximate root location)
         root.width          # float interval width (uncertainty)
     """
+
     interval: Interval
     status: str  # 'confirmed', 'possible', 'no_root', 'unique'
 
@@ -795,6 +892,7 @@ class UniqueRootResult:
         result.root_value   # float midpoint (approximate root)
         result.width        # float interval width (uncertainty)
     """
+
     unique: bool  # True if unique root proven
     interval: Interval  # Refined interval containing the root
     reason: str  # 'newton_contraction', 'no_contraction', 'newton_step_failed'
@@ -834,6 +932,7 @@ class RootsResult:
     Contains intervals that may contain roots, with status indicating
     the certainty level.
     """
+
     roots: list[RootInterval]
     iterations: int
     verified: bool
@@ -841,11 +940,11 @@ class RootsResult:
 
     def confirmed_roots(self) -> list[RootInterval]:
         """Return only roots with confirmed sign change."""
-        return [r for r in self.roots if r.status == 'confirmed']
+        return [r for r in self.roots if r.status == "confirmed"]
 
     def possible_roots(self) -> list[RootInterval]:
         """Return roots that may exist but aren't confirmed."""
-        return [r for r in self.roots if r.status == 'possible']
+        return [r for r in self.roots if r.status == "possible"]
 
     def __repr__(self) -> str:
         confirmed = len(self.confirmed_roots())
@@ -868,6 +967,7 @@ class IntegralResult:
         result.value        # float midpoint (approximate integral)
         result.error        # float maximum error (interval width)
     """
+
     bounds: Interval
     verified: bool
     certificate: Optional[Certificate] = None
@@ -914,6 +1014,7 @@ class VerifyResult:
         result.hi               # float upper bound of computed interval
         result.value            # float midpoint of computed interval
     """
+
     verified: bool
     computed_bound: Interval
     certificate: Optional[Certificate] = None
@@ -961,6 +1062,7 @@ class WitnessPoint:
         interval: Dictionary mapping variable names to (lo, hi) tuples representing
                   the enclosing interval from which this witness was derived
     """
+
     values: dict[str, Fraction]
     function_value: Fraction
     interval: dict[str, tuple[Fraction, Fraction]]
@@ -977,37 +1079,43 @@ class WitnessPoint:
     def to_dict(self) -> dict[str, Any]:
         """Convert to JSON-serializable dictionary."""
         return {
-            'values': {k: {'n': v.numerator, 'd': v.denominator} for k, v in self.values.items()},
-            'function_value': {'n': self.function_value.numerator, 'd': self.function_value.denominator},
-            'interval': {
-                k: {'lo': {'n': lo.numerator, 'd': lo.denominator},
-                    'hi': {'n': hi.numerator, 'd': hi.denominator}}
+            "values": {k: {"n": v.numerator, "d": v.denominator} for k, v in self.values.items()},
+            "function_value": {
+                "n": self.function_value.numerator,
+                "d": self.function_value.denominator,
+            },
+            "interval": {
+                k: {
+                    "lo": {"n": lo.numerator, "d": lo.denominator},
+                    "hi": {"n": hi.numerator, "d": hi.denominator},
+                }
                 for k, (lo, hi) in self.interval.items()
             },
         }
 
     @classmethod
-    def from_dict(cls, data: dict) -> 'WitnessPoint':
+    def from_dict(cls, data: dict) -> "WitnessPoint":
         """Create from JSON dictionary."""
-        values = {k: Fraction(v['n'], v['d']) for k, v in data['values'].items()}
-        function_value = Fraction(data['function_value']['n'], data['function_value']['d'])
+        values = {k: Fraction(v["n"], v["d"]) for k, v in data["values"].items()}
+        function_value = Fraction(data["function_value"]["n"], data["function_value"]["d"])
         interval = {
-            k: (Fraction(v['lo']['n'], v['lo']['d']), Fraction(v['hi']['n'], v['hi']['d']))
-            for k, v in data['interval'].items()
+            k: (Fraction(v["lo"]["n"], v["lo"]["d"]), Fraction(v["hi"]["n"], v["hi"]["d"]))
+            for k, v in data["interval"].items()
         }
         return cls(values=values, function_value=function_value, interval=interval)
 
     def __repr__(self) -> str:
-        vals = ', '.join(f'{k}={float(v):.6f}' for k, v in self.values.items())
+        vals = ", ".join(f"{k}={float(v):.6f}" for k, v in self.values.items())
         return f"WitnessPoint({vals}, f={self.function_value_float:.6f})"
 
 
 @dataclass
 class WitnessResult:
     """Base class for witness synthesis results."""
+
     verified: bool
     certificate: Optional[Certificate] = None
-    strategy_used: str = 'dyadic'
+    strategy_used: str = "dyadic"
     refinement_history: list[dict] = field(default_factory=list)
 
 
@@ -1024,6 +1132,7 @@ class MinWitnessResult(WitnessResult):
         proven_bound: The rigorous lower bound from interval arithmetic
         verified: Whether the witness was verified
     """
+
     witness_value: Fraction = field(default_factory=lambda: Fraction(0))
     witness_point: Optional[WitnessPoint] = None
     proven_bound: Fraction = field(default_factory=lambda: Fraction(0))
@@ -1034,7 +1143,7 @@ class MinWitnessResult(WitnessResult):
         lines.append("-- Auto-synthesized minimum witness")
         lines.append(f"-- Witness value: {float(self.witness_value):.10f}")
         if self.witness_point:
-            vals = ', '.join(f'{k} = {float(v):.6f}' for k, v in self.witness_point.values.items())
+            vals = ", ".join(f"{k} = {float(v):.6f}" for k, v in self.witness_point.values.items())
             lines.append(f"-- Achieved at: {vals}")
         lines.append(f"-- Proven bound: {float(self.proven_bound):.10f}")
         lines.append("")
@@ -1042,7 +1151,7 @@ class MinWitnessResult(WitnessResult):
         lines.append(f"use {self._fraction_to_lean(self.witness_value)}")
         lines.append("intro x hx")
         lines.append("interval_min_witness")
-        return '\n'.join(lines)
+        return "\n".join(lines)
 
     def _fraction_to_lean(self, f: Fraction) -> str:
         """Convert fraction to Lean rational literal."""
@@ -1068,6 +1177,7 @@ class MaxWitnessResult(WitnessResult):
         proven_bound: The rigorous upper bound from interval arithmetic
         verified: Whether the witness was verified
     """
+
     witness_value: Fraction = field(default_factory=lambda: Fraction(0))
     witness_point: Optional[WitnessPoint] = None
     proven_bound: Fraction = field(default_factory=lambda: Fraction(0))
@@ -1078,7 +1188,7 @@ class MaxWitnessResult(WitnessResult):
         lines.append("-- Auto-synthesized maximum witness")
         lines.append(f"-- Witness value: {float(self.witness_value):.10f}")
         if self.witness_point:
-            vals = ', '.join(f'{k} = {float(v):.6f}' for k, v in self.witness_point.values.items())
+            vals = ", ".join(f"{k} = {float(v):.6f}" for k, v in self.witness_point.values.items())
             lines.append(f"-- Achieved at: {vals}")
         lines.append(f"-- Proven bound: {float(self.proven_bound):.10f}")
         lines.append("")
@@ -1086,7 +1196,7 @@ class MaxWitnessResult(WitnessResult):
         lines.append(f"use {self._fraction_to_lean(self.witness_value)}")
         lines.append("intro x hx")
         lines.append("interval_max_witness")
-        return '\n'.join(lines)
+        return "\n".join(lines)
 
     def _fraction_to_lean(self, f: Fraction) -> str:
         """Convert fraction to Lean rational literal."""
@@ -1111,24 +1221,27 @@ class RootWitnessResult(WitnessResult):
         root_interval: The interval guaranteed to contain the root
         verified: Whether the witness was verified (via sign change or Newton)
     """
+
     witness_point: Optional[WitnessPoint] = None
     root_interval: Optional[Interval] = None
-    proof_method: str = 'sign_change'  # 'sign_change' or 'newton_contraction'
+    proof_method: str = "sign_change"  # 'sign_change' or 'newton_contraction'
 
     def to_lean_tactic(self) -> str:
         """Generate Lean tactic code for this root witness proof."""
         lines = []
         lines.append("-- Auto-synthesized root witness")
         if self.witness_point:
-            vals = ', '.join(f'{k} = {float(v):.6f}' for k, v in self.witness_point.values.items())
+            vals = ", ".join(f"{k} = {float(v):.6f}" for k, v in self.witness_point.values.items())
             lines.append(f"-- Witness point: {vals}")
         if self.root_interval:
-            lines.append(f"-- Root interval: [{float(self.root_interval.lo):.10f}, {float(self.root_interval.hi):.10f}]")
+            lines.append(
+                f"-- Root interval: [{float(self.root_interval.lo):.10f}, {float(self.root_interval.hi):.10f}]"
+            )
         lines.append(f"-- Proof method: {self.proof_method}")
         lines.append("")
         lines.append("-- Proof: ∃ x ∈ I, f(x) = 0")
         lines.append("interval_root_witness")
-        return '\n'.join(lines)
+        return "\n".join(lines)
 
     def __repr__(self) -> str:
         status = "VERIFIED" if self.verified else "UNVERIFIED"
@@ -1151,6 +1264,7 @@ class FailureDiagnosis:
         worst_point: Dictionary of variable values at the worst point
         suggested_bound: A suggested bound that would succeed
     """
+
     failure_type: str
     margin: float
     worst_point: dict[str, float]
@@ -1184,8 +1298,9 @@ class LipschitzResult:
         >>> delta = epsilon / L  # = 0.05
         >>> # Now |x - a| < 0.05 guarantees |x² - a²| < 0.1
     """
+
     lipschitz_bound: Fraction
-    gradient_bounds: dict[str, 'Interval']
+    gradient_bounds: dict[str, "Interval"]
     certificate: Optional[Certificate] = None
 
     def delta_for_epsilon(self, epsilon: float) -> float:
@@ -1200,7 +1315,7 @@ class LipschitzResult:
         """
         L = float(self.lipschitz_bound)
         if L <= 0:
-            return float('inf')  # Constant function
+            return float("inf")  # Constant function
         return epsilon / L
 
     def to_lean_tactic(self) -> str:
@@ -1218,17 +1333,19 @@ class LipschitzResult:
         for var, interval in self.gradient_bounds.items():
             lines.append(f"--   ∂f/∂{var} ∈ [{float(interval.lo):.6f}, {float(interval.hi):.6f}]")
 
-        lines.extend([
-            "",
-            f"use ({L.numerator} / {L.denominator})",
-            "intro x y hx hy",
-            "-- Apply MVT: |f(x) - f(y)| ≤ sup|f'| * |x - y|",
-            "apply lipschitz_of_deriv_bound",
-            "· -- Derivative bound",
-            "  interval_deriv_bound",
-        ])
+        lines.extend(
+            [
+                "",
+                f"use ({L.numerator} / {L.denominator})",
+                "intro x y hx hy",
+                "-- Apply MVT: |f(x) - f(y)| ≤ sup|f'| * |x - y|",
+                "apply lipschitz_of_deriv_bound",
+                "· -- Derivative bound",
+                "  interval_deriv_bound",
+            ]
+        )
 
-        return '\n'.join(lines)
+        return "\n".join(lines)
 
     def __repr__(self) -> str:
         L = float(self.lipschitz_bound)

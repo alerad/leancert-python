@@ -19,9 +19,17 @@ from .operations.eventual import (
 from .operations.system_roots import (
     SystemRootPlan,
     execute_system_root_plan,
-    unsupported_system_root,
 )
-from .result import ProofResult
+from .result import (
+    IncompleteConjunction,
+    NormalizedFalse,
+    NormalizedTrue,
+    ProofResult,
+    Verified,
+    VerifiedConjunction,
+    VerifiedEventualBound,
+    VerifiedSystemRoot,
+)
 
 
 def _candidate_fraction(value: object, maximum_denominator: int) -> Fraction:
@@ -60,16 +68,16 @@ class KrawczykCandidate:
             or maximum_denominator <= 0
         ):
             raise ValueError("maximum_denominator must be a positive integer")
-        center_values = tuple(
-            _candidate_fraction(value, maximum_denominator) for value in center
-        )
+        center_values = tuple(_candidate_fraction(value, maximum_denominator) for value in center)
         matrix = tuple(
             tuple(_candidate_fraction(value, maximum_denominator) for value in row)
             for row in preconditioner
         )
         dimension = len(center_values)
-        if dimension == 0 or len(matrix) != dimension or any(
-            len(row) != dimension for row in matrix
+        if (
+            dimension == 0
+            or len(matrix) != dimension
+            or any(len(row) != dimension for row in matrix)
         ):
             raise ValueError("Krawczyk center and preconditioner must have square dimensions")
         return cls(center_values, matrix)
@@ -80,9 +88,7 @@ class KrawczykCandidate:
 
         return {
             "center": [rat(value) for value in self.center],
-            "preconditioner": [
-                [rat(value) for value in row] for row in self.preconditioner
-            ],
+            "preconditioner": [[rat(value) for value in row] for row in self.preconditioner],
         }
 
 
@@ -124,6 +130,24 @@ class EventualConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class RefutationConfig:
+    """Bounded search budget for checked rational point-box refutations."""
+
+    enabled: bool = False
+    max_candidates: int = 27
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.enabled, bool):
+            raise TypeError("enabled must be a boolean")
+        if (
+            isinstance(self.max_candidates, bool)
+            or not isinstance(self.max_candidates, int)
+            or self.max_candidates <= 0
+        ):
+            raise ValueError("max_candidates must be a positive integer")
+
+
+@dataclass(frozen=True, slots=True)
 class ProveConfig:
     """Effort controls for checked claim execution.
 
@@ -135,6 +159,7 @@ class ProveConfig:
     taylor_depth: int = 10
     system_root: SystemRootConfig = field(default_factory=SystemRootConfig)
     eventual: EventualConfig = field(default_factory=EventualConfig)
+    refutation: RefutationConfig = field(default_factory=RefutationConfig)
 
     def __post_init__(self) -> None:
         if (
@@ -147,6 +172,8 @@ class ProveConfig:
             raise TypeError("system_root must be a SystemRootConfig")
         if not isinstance(self.eventual, EventualConfig):
             raise TypeError("eventual must be an EventualConfig")
+        if not isinstance(self.refutation, RefutationConfig):
+            raise TypeError("refutation must be a RefutationConfig")
 
 
 def prove(
@@ -169,82 +196,176 @@ def prove(
         raise TypeError("config must be a ProveConfig")
 
     normalized_claim = ast.close_claim(claim, where)
+    logical = _logical_constant(normalized_claim)
+    if logical is True:
+        return NormalizedTrue(claim, normalized_claim, ast.semantic_digest(normalized_claim))
+    if logical is False:
+        return NormalizedFalse(claim, normalized_claim, ast.semantic_digest(normalized_claim))
+
+    owns_client = client is None
+    active_client = LeanClient() if client is None else client
+    try:
+        return _prove_normalized(claim, normalized_claim, config, active_client)
+    finally:
+        if owns_client:
+            active_client.close()
+
+
+def _bounded_conjunction_children(claim: ast.Claim) -> tuple[ast.Claim, ...] | None:
+    binders: list[ast.Binder] = []
+    body = claim
+    while isinstance(body, ast.BoundedForAllClaim):
+        binders.append(body.binder)
+        body = body.body
+    if not isinstance(body, ast.ConjunctionClaim):
+        return None
+
+    children: list[ast.Claim] = []
+    for item in body.claims:
+        child: ast.Claim = item
+        for binder in reversed(binders):
+            child = ast.BoundedForAllClaim(binder, child)
+        children.append(ast.normalize(child))
+    return tuple(children)
+
+
+def _bounded_equality_children(claim: ast.Claim) -> tuple[ast.Claim, ...] | None:
+    binders: list[ast.Binder] = []
+    body = claim
+    while isinstance(body, ast.BoundedForAllClaim):
+        binders.append(body.binder)
+        body = body.body
+    if not isinstance(body, ast.ComparisonClaim) or body.relation is not ast.Relation.EQ:
+        return None
+
+    comparisons = (
+        ast.ComparisonClaim(body.lhs, ast.Relation.LE, body.rhs),
+        ast.ComparisonClaim(body.rhs, ast.Relation.LE, body.lhs),
+    )
+    children: list[ast.Claim] = []
+    for comparison in comparisons:
+        child: ast.Claim = comparison
+        for binder in reversed(binders):
+            child = ast.BoundedForAllClaim(binder, child)
+        children.append(ast.normalize(child))
+    return tuple(children)
+
+
+def _logical_constant(claim: ast.Claim) -> bool | None:
+    body = claim
+    has_empty_domain = False
+    has_unknown_domain = False
+    while isinstance(body, ast.BoundedForAllClaim):
+        domain = body.binder.domain
+        if isinstance(domain, ast.Interval):
+            lower = ast.normalize(domain.lower)
+            upper = ast.normalize(domain.upper)
+            if not isinstance(lower, ast.RationalConstant) or not isinstance(
+                upper, ast.RationalConstant
+            ):
+                has_unknown_domain = True
+            elif lower.value > upper.value or (
+                lower.value == upper.value and not (domain.lower_closed and domain.upper_closed)
+            ):
+                has_empty_domain = True
+        else:
+            has_unknown_domain = True
+        body = body.body
+    if isinstance(body, ast.TrueClaim):
+        return True
+    if isinstance(body, ast.FalseClaim):
+        if has_empty_domain:
+            return True
+        if not has_unknown_domain:
+            return False
+    return None
+
+
+def _established(result: ProofResult) -> bool:
+    return isinstance(
+        result,
+        (Verified, VerifiedSystemRoot, VerifiedEventualBound, VerifiedConjunction, NormalizedTrue),
+    )
+
+
+def _prove_normalized(
+    original_claim: ast.Claim,
+    normalized_claim: ast.Claim,
+    config: ProveConfig,
+    client: LeanClient,
+) -> ProofResult:
     claim_id = ast.semantic_digest(normalized_claim)
     assert isinstance(claim_id, ast.ClaimDigest)
+    logical = _logical_constant(normalized_claim)
+    if logical is True:
+        return NormalizedTrue(original_claim, normalized_claim, claim_id)
+    if logical is False:
+        return NormalizedFalse(original_claim, normalized_claim, claim_id)
+
     if isinstance(normalized_claim, ast.SystemRootClaim):
-        if not normalized_claim.uniqueness:
-            return unsupported_system_root(
-                normalized_claim,
-                original_claim=claim,
-                normalized_claim=normalized_claim,
-                claim_id=claim_id,
-                reason="the initial checked system-root route certifies uniqueness",
-            )
-        owns_client = client is None
-        active_client = LeanClient() if client is None else client
-        try:
-            return execute_system_root_plan(
-                SystemRootPlan(normalized_claim),
-                original_claim=claim,
-                normalized_claim=normalized_claim,
-                claim_id=claim_id,
-                client=active_client,
-                config=config.system_root,
-                taylor_depth=config.taylor_depth,
-            )
-        finally:
-            if owns_client:
-                active_client.close()
+        return execute_system_root_plan(
+            SystemRootPlan(normalized_claim),
+            original_claim=original_claim,
+            normalized_claim=normalized_claim,
+            claim_id=claim_id,
+            client=client,
+            config=config.system_root,
+            taylor_depth=config.taylor_depth,
+        )
     if isinstance(normalized_claim, ast.EventualClaim):
         plan, unsupported_reason = try_plan_eventual_claim(normalized_claim)
         if plan is None:
             assert unsupported_reason is not None
             return unsupported_eventual(
                 normalized_claim,
-                original_claim=claim,
+                original_claim=original_claim,
                 normalized_claim=normalized_claim,
                 claim_id=claim_id,
                 reason=unsupported_reason,
             )
-        owns_client = client is None
-        active_client = LeanClient() if client is None else client
-        try:
-            return execute_eventual_plan(
-                plan,
-                original_claim=claim,
-                normalized_claim=normalized_claim,
-                claim_id=claim_id,
-                client=active_client,
-                max_checks=config.eventual.max_checks,
-            )
-        finally:
-            if owns_client:
-                active_client.close()
-    plan, unsupported_reason = try_plan_bound_claim(normalized_claim)
-    if plan is None:
-        assert unsupported_reason is not None
-        return unsupported_result(claim, normalized_claim, claim_id, unsupported_reason)
-
-    owns_client = client is None
-    active_client = LeanClient() if client is None else client
-    try:
-        return execute_bound_plan(
+        return execute_eventual_plan(
             plan,
-            original_claim=claim,
+            original_claim=original_claim,
             normalized_claim=normalized_claim,
             claim_id=claim_id,
-            client=active_client,
-            taylor_depth=config.taylor_depth,
+            client=client,
+            max_checks=config.eventual.max_checks,
         )
-    finally:
-        if owns_client:
-            active_client.close()
+    plan, unsupported_reason = try_plan_bound_claim(normalized_claim)
+    if plan is not None:
+        return execute_bound_plan(
+            plan,
+            original_claim=original_claim,
+            normalized_claim=normalized_claim,
+            claim_id=claim_id,
+            client=client,
+            taylor_depth=config.taylor_depth,
+            refutation_config=config.refutation,
+        )
+
+    aggregate_children = _bounded_conjunction_children(normalized_claim)
+    if aggregate_children is None:
+        aggregate_children = _bounded_equality_children(normalized_claim)
+    if aggregate_children is not None:
+        children = tuple(
+            _prove_normalized(child, child, config, client) for child in aggregate_children
+        )
+        result_type = (
+            VerifiedConjunction
+            if all(_established(child) for child in children)
+            else IncompleteConjunction
+        )
+        return result_type(children, original_claim, normalized_claim, claim_id)
+
+    assert unsupported_reason is not None
+    return unsupported_result(original_claim, normalized_claim, claim_id, unsupported_reason)
 
 
 __all__ = [
     "EventualConfig",
     "KrawczykCandidate",
     "ProveConfig",
+    "RefutationConfig",
     "SystemRootConfig",
     "prove",
 ]

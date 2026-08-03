@@ -81,6 +81,10 @@ def test_eventual_cutoff_round_trip():
 def test_named_constants_transcendentals_and_derivative():
     x = lc.var("x")
     assert lc.sin(lc.pi).sort == lc.REAL
+    assert lc.alpha_equivalent(
+        lc.decode_canonical(lc.encode_canonical(lc.euler_mascheroni)),
+        lc.euler_mascheroni,
+    )
     for fn in (lc.arcsin, lc.arccos, lc.sinh, lc.cosh, lc.tanh, lc.sinc, lc.erf):
         assert fn(x).sort == lc.REAL
     derivative = lc.derivative(lc.sin(x), x)
