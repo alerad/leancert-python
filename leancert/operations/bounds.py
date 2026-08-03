@@ -197,28 +197,59 @@ def _compile_expression(
 
 def bridge_provenance(client: Any) -> BridgeProvenance:
     info = client.bridge_info
-    build = info.get("build") if isinstance(info.get("build"), dict) else {}
     contract = client.bridge_contract
     dependencies = contract.dependencies
+    environment = getattr(client, "environment", None)
+    lock = getattr(environment, "lock", None)
+    packages = () if lock is None else lock.packages
+
+    def package_named(name: str):
+        return next((package for package in packages if package.name.lower() == name), None)
+
+    leancert = package_named("leancert")
+    bridge = package_named("leancertbridge")
     return BridgeProvenance(
+        environment_id=getattr(environment, "id", None),
+        execution_id=getattr(client, "execution_id", None),
+        environment_lock_id=None if lock is None else lock.lock_id,
         bridge_api_version=info.get("bridge_api_version"),
         protocol_version=info.get("protocol_version"),
         bridge_version=info.get("bridge_version"),
         lean_version=info.get("lean_version"),
         leancert_version=info.get("leancert_version"),
-        source_revision=build.get("source_revision"),
-        source_digest=build.get("source_digest"),
-        environment_digest=build.get("environment_digest"),
-        build_profile=build.get("profile"),
         capability_digest=contract.capability_digest,
-        lean_toolchain=None if dependencies is None else dependencies.lean_toolchain,
-        leancert_source=None if dependencies is None else dependencies.leancert_source,
+        lean_toolchain=(
+            dependencies.lean_toolchain
+            if lock is None and dependencies is not None
+            else lock.toolchain
+        )
+        if lock is not None or dependencies is not None
+        else None,
+        leancert_source=(
+            dependencies.leancert_source
+            if leancert is None and dependencies is not None
+            else leancert.url
+        )
+        if leancert is not None or dependencies is not None
+        else None,
         leancert_input_revision=(
-            None if dependencies is None else dependencies.leancert_input_revision
-        ),
+            dependencies.leancert_input_revision
+            if leancert is None and dependencies is not None
+            else leancert.requested_revision
+        )
+        if leancert is not None or dependencies is not None
+        else None,
         leancert_resolved_revision=(
-            None if dependencies is None else dependencies.leancert_resolved_revision
-        ),
+            dependencies.leancert_resolved_revision
+            if leancert is None and dependencies is not None
+            else leancert.revision
+        )
+        if leancert is not None or dependencies is not None
+        else None,
+        leancert_tree_hash=None if leancert is None else leancert.tree_hash,
+        bridge_source=None if bridge is None else bridge.url,
+        bridge_resolved_revision=None if bridge is None else bridge.revision,
+        bridge_tree_hash=None if bridge is None else bridge.tree_hash,
     )
 
 

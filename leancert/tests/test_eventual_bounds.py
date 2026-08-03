@@ -6,6 +6,7 @@ import copy
 import json
 from fractions import Fraction
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -80,6 +81,8 @@ def verified_response(
 class FakeEventualClient:
     def __init__(self, status: str = "verified"):
         self.bridge_info, self.bridge_contract = contract_24()
+        self.environment = SimpleNamespace(id="env_" + "a" * 64)
+        self.execution_id = "execution_" + "b" * 64
         self.status = status
         self.calls: list[dict] = []
 

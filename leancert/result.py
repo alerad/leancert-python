@@ -62,10 +62,10 @@ class ConjunctionResult(ProofResult):
 class VerifiedConjunction(ConjunctionResult):
     """Every non-trivial child has checked evidence; exact children are labeled."""
 
-    def export_lean_project(self, path: str, *, verify: bool = True):
+    def export_lean_project(self, path: str, *, verify: bool = True, runtime: Any = None):
         from .export import export_verified_conjunction
 
-        return export_verified_conjunction(self, path, verify=verify)
+        return export_verified_conjunction(self, path, verify=verify, runtime=runtime)
 
 
 @dataclass(frozen=True)
@@ -94,6 +94,9 @@ class BoundComparisonLowering:
 class BridgeProvenance:
     """Exact negotiated environment that performed a checked operation."""
 
+    environment_id: str | None = None
+    execution_id: str | None = None
+    environment_lock_id: str | None = None
     bridge_api_version: str | None = None
     protocol_version: str | None = None
     bridge_version: str | None = None
@@ -108,6 +111,10 @@ class BridgeProvenance:
     leancert_source: str | None = None
     leancert_input_revision: str | None = None
     leancert_resolved_revision: str | None = None
+    leancert_tree_hash: str | None = None
+    bridge_source: str | None = None
+    bridge_resolved_revision: str | None = None
+    bridge_tree_hash: str | None = None
 
 
 @dataclass(frozen=True)
@@ -355,11 +362,12 @@ class Verified(BoundCheck):
         path: str,
         *,
         verify: bool = True,
+        runtime: Any = None,
     ):
         """Export and optionally kernel-check the retained fixed certificates."""
         from .export import export_verified_bound
 
-        return export_verified_bound(self, path, verify=verify)
+        return export_verified_bound(self, path, verify=verify, runtime=runtime)
 
 
 @dataclass(frozen=True)
@@ -375,7 +383,7 @@ class VerifiedRegisteredEnclosure(Verified):
             results.append(certificate.replay(client))
         return tuple(results)
 
-    def export_lean_project(self, path: str, *, verify: bool = True):
+    def export_lean_project(self, path: str, *, verify: bool = True, runtime: Any = None):
         return ExportUnsupported(
             "registered enclosure export requires packaging the downstream Lean modules; "
             "use fixed Bridge replay in the same profiled environment"
@@ -457,11 +465,11 @@ class VerifiedSystemRoot(SystemRootResult):
 
     certificate: ReplayableKrawczykCertificate
 
-    def export_lean_project(self, path: str, *, verify: bool = True):
+    def export_lean_project(self, path: str, *, verify: bool = True, runtime: Any = None):
         """Export and optionally kernel-check the fixed Krawczyk certificate."""
         from .export import export_verified_system_root
 
-        return export_verified_system_root(self, path, verify=verify)
+        return export_verified_system_root(self, path, verify=verify, runtime=runtime)
 
 
 @dataclass(frozen=True)
@@ -507,30 +515,30 @@ class ScalarRootResult(ProofResult):
 class VerifiedRootExistence(ScalarRootResult):
     certificate: ReplayableScalarRootCertificate
 
-    def export_lean_project(self, path: str, *, verify: bool = True):
+    def export_lean_project(self, path: str, *, verify: bool = True, runtime: Any = None):
         from .export import export_verified_scalar_root
 
-        return export_verified_scalar_root(self, path, verify=verify)
+        return export_verified_scalar_root(self, path, verify=verify, runtime=runtime)
 
 
 @dataclass(frozen=True)
 class VerifiedUniqueRoot(ScalarRootResult):
     certificate: ReplayableScalarRootCertificate
 
-    def export_lean_project(self, path: str, *, verify: bool = True):
+    def export_lean_project(self, path: str, *, verify: bool = True, runtime: Any = None):
         from .export import export_verified_scalar_root
 
-        return export_verified_scalar_root(self, path, verify=verify)
+        return export_verified_scalar_root(self, path, verify=verify, runtime=runtime)
 
 
 @dataclass(frozen=True)
 class VerifiedRootExclusion(ScalarRootResult):
     certificate: ReplayableScalarRootCertificate
 
-    def export_lean_project(self, path: str, *, verify: bool = True):
+    def export_lean_project(self, path: str, *, verify: bool = True, runtime: Any = None):
         from .export import export_verified_scalar_root
 
-        return export_verified_scalar_root(self, path, verify=verify)
+        return export_verified_scalar_root(self, path, verify=verify, runtime=runtime)
 
 
 @dataclass(frozen=True)
@@ -588,20 +596,20 @@ class CheckedIntegralResult(ProofResult):
 class VerifiedIntegralEquality(CheckedIntegralResult):
     certificate: ReplayableIntegralCertificate
 
-    def export_lean_project(self, path: str, *, verify: bool = True):
+    def export_lean_project(self, path: str, *, verify: bool = True, runtime: Any = None):
         from .export import export_verified_integral
 
-        return export_verified_integral(self, path, verify=verify)
+        return export_verified_integral(self, path, verify=verify, runtime=runtime)
 
 
 @dataclass(frozen=True)
 class VerifiedIntegralBound(CheckedIntegralResult):
     certificate: ReplayableIntegralCertificate
 
-    def export_lean_project(self, path: str, *, verify: bool = True):
+    def export_lean_project(self, path: str, *, verify: bool = True, runtime: Any = None):
         from .export import export_verified_integral
 
-        return export_verified_integral(self, path, verify=verify)
+        return export_verified_integral(self, path, verify=verify, runtime=runtime)
 
 
 @dataclass(frozen=True)
@@ -672,11 +680,11 @@ class VerifiedEventualBound(EventualBoundResult):
 
     certificate: ReplayableEventualCertificate
 
-    def export_lean_project(self, path: str, *, verify: bool = True):
+    def export_lean_project(self, path: str, *, verify: bool = True, runtime: Any = None):
         """Export and optionally kernel-check the retained fixed cutoff."""
         from .export import export_verified_eventual_bound
 
-        return export_verified_eventual_bound(self, path, verify=verify)
+        return export_verified_eventual_bound(self, path, verify=verify, runtime=runtime)
 
 
 @dataclass(frozen=True)

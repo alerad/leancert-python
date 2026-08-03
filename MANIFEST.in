@@ -1,6 +1,3 @@
-# Include the pre-built Lean binary
-recursive-include leancert/bin *
-
 # Include license and readme
 include LICENSE
 include README.md

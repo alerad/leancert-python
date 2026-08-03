@@ -70,7 +70,7 @@ def test_semantic_versions_are_canonical_and_major_checked():
     with pytest.raises(ProtocolViolation, match="canonical"):
         ProtocolVersion.parse("01.1.0")
     handshake = typed_handshake()
-    handshake["bridge_api_version"] = handshake["protocol_version"] = "3.0.0"
+    handshake["bridge_api_version"] = handshake["protocol_version"] = "4.0.0"
     with pytest.raises(ProtocolViolation, match="supports major"):
         BridgeHandshake.parse(handshake)
 
@@ -98,6 +98,19 @@ def test_typed_handshake_retains_capability_identity():
     assert capability.result_schema == "bound-outcome/1"
     assert handshake.capability_digest.startswith("sha256:")
     assert handshake.capability_digest == BridgeHandshake.parse(typed_handshake()).capability_digest
+
+
+def test_managed_runtime_handshake_does_not_require_embedded_build_identity():
+    value = typed_handshake()
+    value["bridge_api_version"] = value["protocol_version"] = "3.0.0"
+    value.pop("build")
+    value.pop("dependencies", None)
+
+    handshake = BridgeHandshake.parse(value)
+
+    assert handshake.build is None
+    assert handshake.dependencies is None
+    assert handshake.capability_digest.startswith("sha256:")
 
 
 def test_contract_1_1_remains_supported_during_binary_rollout():

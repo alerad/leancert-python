@@ -1,8 +1,11 @@
 # Releasing leancert-python
 
-## 1. Pick bridge release
+## 1. Release runtime dependencies
 
-Update `bridge-version.txt` to the bridge tag to bundle (for example `bridge-v4.31.0`).
+Release the minimum compatible `lean-runtime` version first. Update the exact
+Bridge package reference in `leancert/client.py` only when the SDK needs a new
+mathematical Bridge contract. Core, Bridge, runtime, and SDK versions remain
+independent; the runtime lock records their exact revisions together.
 
 ## 2. Validate wheel build
 
@@ -12,9 +15,11 @@ Run CI workflow `Build Wheels` manually or open a PR.
 
 Create and push a tag matching the version in `pyproject.toml` (for example `v0.3.2`).
 
-The publish job builds wheels, verifies a smoke test, and uploads to PyPI.
+The publish job builds one pure Python wheel plus an sdist, verifies the wheel
+on Linux, macOS, and Windows, and uploads both to PyPI.
 
 ## Notes
 
-- Wheels are built by downloading `lean_bridge` assets from `alerad/leancert-bridge` releases.
-- Runtime compatibility is enforced via bridge `get_info` and `bridge_api_version` major check.
+- Wheels contain no Lean or Bridge binaries.
+- Supply-chain identity comes from the content-addressed `lean-runtime`
+  environment; mathematical compatibility comes from the Bridge handshake.

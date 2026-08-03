@@ -19,16 +19,21 @@ The `get_info` handshake identifies:
 
 - protocol, bridge, Lean, and LeanCert versions;
 - NDJSON framing and the protocol name;
-- source revision, source digest, environment digest, and build profile;
 - supported operations and expression nodes;
 - certificate schemas and verification routes;
 - each checked operation's request schema, result schema, outcomes, backends,
   certificate schemas, and verification routes.
 
+Source revisions, dependency locks, tree hashes, toolchains, platform identity,
+and execution IDs come from the surrounding `lean-runtime` environment rather
+than self-reported Bridge fields. Older Bridge build/dependency blocks remain
+parseable for artifact compatibility but are not trusted as managed execution
+provenance.
+
 The client refuses unadvertised operations and rejects responses whose backend,
 certificate schema, or verification route was not negotiated. Contract 1.0 and
-1.1 remain explicit compatibility modes while previously published bundled
-bridge binaries are phased out. Unknown major versions are rejected.
+1.1 remain explicit compatibility modes for older deployments. Unknown major
+versions are rejected.
 
 ## Checked bound outcomes
 
