@@ -80,7 +80,12 @@ weakened to a non-strict claim. Older Bridges return `Unsupported` without
 receiving a strict request.
 
 External functions remain capability-gated. A bridge that does not
-advertise an expression node receives no request for that node. The semantic
+advertise an expression node receives no request for that node. Contract 2.8
+provides the deliberately narrower
+[registered downstream enclosure route](registered-enclosures.md): callable
+handles come only from a frozen, handshake-validated profile and retain fixed
+replay evidence. Arbitrary external function references remain unsupported.
+The semantic
 AST constants `ast.e` and `ast.log_two` currently have no Lean Core wire
 identity and therefore remain precisely unsupported. `ast.pi` and
 `ast.euler_mascheroni` use the canonical negotiated wire identities when the

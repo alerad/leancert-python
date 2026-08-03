@@ -53,6 +53,7 @@ from .domain import (
     Interval,
     normalize_domain,
 )
+from .enclosures import EnclosureEnvironment, EnclosureProfile, RegisteredFunction
 
 # Exceptions
 from .exceptions import (
@@ -123,6 +124,7 @@ from .proving import (
     KrawczykCandidate,
     ProveConfig,
     RefutationConfig,
+    RegisteredEnclosureConfig,
     SystemRootConfig,
     prove,
 )
@@ -153,8 +155,8 @@ from .result import (
     CandidateCounterexample,
     CandidateRejected,
     Certificate,
-    CheckedIntegralResult,
     CheckedCounterexample,
+    CheckedIntegralResult,
     ConjunctionResult,
     DomainObstruction,
     EventualBoundResult,
@@ -186,6 +188,7 @@ from .result import (
     ReplayableEventualCertificate,
     ReplayableIntegralCertificate,
     ReplayableKrawczykCertificate,
+    ReplayableRegisteredEnclosureCertificate,
     ReplayableScalarRootCertificate,
     ReplayableStrictBoundCertificate,
     ReplayBoundConfig,
@@ -205,6 +208,7 @@ from .result import (
     VerifiedEventualBound,
     VerifiedIntegralBound,
     VerifiedIntegralEquality,
+    VerifiedRegisteredEnclosure,
     VerifiedRootExclusion,
     VerifiedRootExistence,
     VerifiedSystemRoot,
@@ -322,6 +326,7 @@ __all__ = [
     "DomainObstruction",
     "ReplayableBoundCertificate",
     "ReplayableStrictBoundCertificate",
+    "ReplayableRegisteredEnclosureCertificate",
     "ReplayBoundConfig",
     "LeanProjectArtifact",
     "ExportPrepared",
@@ -359,6 +364,7 @@ __all__ = [
     "EventualCandidateRejected",
     "InconclusiveEventualBound",
     "UnsupportedEventualBound",
+    "VerifiedRegisteredEnclosure",
     # Adaptive verification (CEGAR)
     "AdaptiveResult",
     "AdaptiveConfig",
@@ -377,6 +383,7 @@ __all__ = [
     "KrawczykCandidate",
     "EventualConfig",
     "IntegralConfig",
+    "RegisteredEnclosureConfig",
     "prove",
     "find_roots",
     "find_unique_root",
@@ -386,6 +393,9 @@ __all__ = [
     "verify_nn_bounds",
     # Client
     "LeanClient",
+    "EnclosureProfile",
+    "EnclosureEnvironment",
+    "RegisteredFunction",
     "DoctorCheck",
     "DoctorReport",
     "diagnose",

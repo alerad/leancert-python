@@ -15,11 +15,13 @@ import os
 import shutil
 import subprocess
 import threading
+from collections.abc import Mapping
 from fractions import Fraction
 from pathlib import Path
 from typing import Any
 
 from .domain import Interval
+from .enclosures import EnclosureEnvironment, EnclosureProfile
 from .exceptions import BridgeError, BridgeRemoteError, ProtocolViolation
 from .protocol import (
     BoundOperationOutcome,
@@ -51,7 +53,13 @@ class LeanClient:
             result = client.call('ping', {})
     """
 
-    def __init__(self, binary_path: str | None = None):
+    def __init__(
+        self,
+        binary_path: str | None = None,
+        *,
+        enclosure_profile: str | Path | EnclosureProfile | None = None,
+        project_dir: str | Path | None = None,
+    ):
         """
         Initialize the client.
 
@@ -60,21 +68,28 @@ class LeanClient:
                         for it in standard locations.
         """
         self.binary_path = self._find_binary(binary_path)
+        self.enclosure_profile = (
+            enclosure_profile
+            if isinstance(enclosure_profile, EnclosureProfile)
+            else None if enclosure_profile is None else EnclosureProfile.load(enclosure_profile)
+        )
+        self.project_dir = None if project_dir is None else Path(project_dir).expanduser().resolve()
         self._process: subprocess.Popen | None = None
         self._request_id = 0
         self._contract_checked = False
         self._bridge_info: dict[str, Any] | None = None
         self._bridge_contract: BridgeHandshake | None = None
         self._io_lock = threading.RLock()
+        self._enclosures: EnclosureEnvironment | None = None
 
     def _find_binary(self, binary_path: str | None) -> str:
         """Find the lean_bridge binary."""
         if binary_path and os.path.isfile(binary_path):
-            return binary_path
+            return str(Path(binary_path).expanduser().resolve())
 
         env_binary = os.getenv("LEANCERT_BRIDGE_PATH")
         if env_binary and os.path.isfile(env_binary):
-            return env_binary
+            return str(Path(env_binary).expanduser().resolve())
 
         import sys
 
@@ -98,7 +113,7 @@ class LeanClient:
 
         for candidate in candidates:
             if candidate.is_file():
-                return str(candidate)
+                return str(candidate.resolve())
 
         # Try PATH
         path_binary = shutil.which("lean_bridge")
@@ -117,8 +132,18 @@ class LeanClient:
             self._contract_checked = False
             self._bridge_info = None
             self._bridge_contract = None
+            self._enclosures = None
+            command = [self.binary_path]
+            if self.enclosure_profile is not None:
+                command.extend(["--enclosure-profile", str(self.enclosure_profile.path)])
+            if self.project_dir is not None:
+                lake = shutil.which("lake")
+                if lake is None:
+                    raise FileNotFoundError("project_dir requires the Lake executable on PATH")
+                command = [lake, "env", *command]
             self._process = subprocess.Popen(
-                [self.binary_path],
+                command,
+                cwd=None if self.project_dir is None else self.project_dir,
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
@@ -134,6 +159,8 @@ class LeanClient:
 
         info = self._call_raw("get_info", {})
         contract = BridgeHandshake.parse(info)
+        if self.enclosure_profile is not None:
+            self.enclosure_profile.validate_handshake(contract.enclosure_profile)
         self._bridge_info = dict(contract.raw)
         self._bridge_contract = contract
         self._contract_checked = True
@@ -243,6 +270,8 @@ class LeanClient:
         """Get bridge metadata including API and Lean versions."""
         result = self.call("get_info", {})
         contract = BridgeHandshake.parse(result)
+        if self.enclosure_profile is not None:
+            self.enclosure_profile.validate_handshake(contract.enclosure_profile)
         self._bridge_info = dict(contract.raw)
         self._bridge_contract = contract
         self._contract_checked = True
@@ -262,6 +291,28 @@ class LeanClient:
             self.get_info()
         assert self._bridge_contract is not None
         return self._bridge_contract
+
+    @property
+    def enclosures(self) -> EnclosureEnvironment:
+        """Return function handles from the immutable negotiated profile."""
+        if self.enclosure_profile is None:
+            raise BridgeError("this Bridge process was not configured with an enclosure profile")
+        contract = self.bridge_contract
+        assert contract.enclosure_profile is not None
+        if self._enclosures is None:
+            self._enclosures = EnclosureEnvironment(self.enclosure_profile, contract.enclosure_profile)
+        return self._enclosures
+
+    def check_registered_enclosure(self, params: dict[str, Any]) -> dict[str, Any]:
+        return self.call("check_registered_enclosure", params)
+
+    def replay_registered_enclosure(
+        self, claim: dict[str, Any], certificate: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        return self.call(
+            "replay_registered_enclosure",
+            {"claim": claim, "certificate": dict(certificate)},
+        )
 
     def eval_interval(
         self,
@@ -985,6 +1036,8 @@ class LeanClient:
                             stream.close()
                     self._process = None
                     self._bridge_info = None
+                    self._bridge_contract = None
+                    self._enclosures = None
                     self._contract_checked = False
 
     def __enter__(self) -> LeanClient:

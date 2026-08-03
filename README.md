@@ -43,6 +43,8 @@ Bridge Contract 2.6 adds exact polynomial integral equalities and replayable
 one-sided integral bounds with fixed checked partitions.
 Bridge Contract 2.7 adds replayable strict global bounds backed by an exact
 interior margin and the existing checked non-strict Golden Theorems.
+Bridge Contract 2.8 adds [profile-bound downstream enclosure rules](docs/registered-enclosures.md)
+with immutable registry negotiation and candidate-free fixed replay.
 
 Exported projects can be audited without rerunning Python or numerical search:
 
