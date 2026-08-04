@@ -100,6 +100,37 @@ def test_environment_resolution_is_lazy():
     assert runtime.calls == [(["github:a/b@v1"], 3600.0)]
 
 
+def test_default_runtime_prefers_leancert_and_shared_oci_caches(monkeypatch):
+    calls = []
+
+    def runtime_factory(**kwargs):
+        calls.append(kwargs)
+        return SimpleNamespace()
+
+    monkeypatch.delenv("LEAN_RUNTIME_CACHES", raising=False)
+    monkeypatch.setattr(client_module, "Runtime", runtime_factory)
+
+    client_module._new_default_runtime()
+
+    assert calls == [{"caches": client_module.DEFAULT_RUNTIME_CACHES}]
+    assert client_module.DEFAULT_RUNTIME_CACHES[0] == ("oci://ghcr.io/alerad/leancert-runtime")
+
+
+def test_explicit_runtime_cache_environment_replaces_sdk_defaults(monkeypatch):
+    calls = []
+
+    def runtime_factory(**kwargs):
+        calls.append(kwargs)
+        return SimpleNamespace()
+
+    monkeypatch.setenv("LEAN_RUNTIME_CACHES", "")
+    monkeypatch.setattr(client_module, "Runtime", runtime_factory)
+
+    client_module._new_default_runtime()
+
+    assert calls == [{}]
+
+
 def test_default_clients_share_one_resolved_environment(monkeypatch):
     class FakeRuntime:
         def __init__(self):

@@ -96,18 +96,57 @@ jobs:
         shell: bash
         run: |
           python - <<'PY'
+          from importlib.metadata import version
+
           import leancert
-          from leancert.client import DEFAULT_BRIDGE_PACKAGE_REF, LeanClient
+          from leancert.client import (
+              DEFAULT_BRIDGE_PACKAGE_REF,
+              DEFAULT_RUNTIME_CACHES,
+              LeanClient,
+          )
 
           client = LeanClient()
+          assert version("lean-runtime").split(".", 1)[0] == "1"
           assert client.package_ref == DEFAULT_BRIDGE_PACKAGE_REF
+          assert DEFAULT_RUNTIME_CACHES[0] == "oci://ghcr.io/alerad/leancert-runtime"
           assert client.execution_id is None
           assert client._environment is None
           print("pure Python managed-runtime wheel smoke test passed")
           PY
 
+  managed-runtime-integration:
+    needs: build-distributions
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: actions/download-artifact@v4
+        with:
+          name: distributions
+          path: dist
+      - name: Install the built SDK
+        shell: bash
+        run: pip install dist/*.whl
+      - name: Prove through the published OCI environment
+        shell: bash
+        env:
+          LEAN_RUNTIME_PREBUILT: require
+        run: |
+          python - <<'PY'
+          import leancert as lc
+
+          x = lc.ast.var("x")
+          result = lc.prove(x * x <= 1, where={x: (-1, 1)})
+          assert isinstance(result, lc.Verified), result
+          assert result.provenance.environment_id.startswith("env_")
+          assert result.provenance.execution_id.startswith("execution_")
+          print(result.provenance.environment_id)
+          PY
+
   publish:
-    needs: [safety-tests, build-distributions, test-wheel]
+    needs: [safety-tests, build-distributions, test-wheel, managed-runtime-integration]
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
@@ -118,7 +157,7 @@ jobs:
           name: distributions
           path: dist
       - name: Require the managed runtime release on PyPI
-        run: pip install 'lean-runtime>=0.6.0,<0.7.0'
+        run: pip install 'lean-runtime>=1.0.0,<2.0.0'
       - uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: dist/

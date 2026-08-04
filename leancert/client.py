@@ -13,6 +13,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
 import threading
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
@@ -48,7 +49,11 @@ def _bridge_core_expression(value: dict[str, Any]) -> dict[str, Any]:
 
 
 DEFAULT_BRIDGE_PACKAGE_REF = (
-    "github:alerad/leancert-bridge@0ff90d2dc822d7108fecbf45b1c529135ada978b"
+    "github:alerad/leancert-bridge@a3d6644186d20ffc4959373d08e4a2f33f0adaf1"
+)
+DEFAULT_RUNTIME_CACHES = (
+    "oci://ghcr.io/alerad/leancert-runtime",
+    "oci://ghcr.io/alerad/lean-runtime-cache",
 )
 DEFAULT_BRIDGE_COMMAND = ("lake", "exe", "@LeanCertBridge/lean_bridge")
 DEFAULT_ARTIFACT_COMMAND = (
@@ -57,7 +62,15 @@ DEFAULT_ARTIFACT_COMMAND = (
     "@LeanCertBridge/lean_bridge_runtime_prepare",
 )
 
-_DEFAULT_RUNTIME = Runtime()
+
+def _new_default_runtime() -> Runtime:
+    """Prefer LeanCert's verified OCI cache while honoring explicit user policy."""
+    if "LEAN_RUNTIME_CACHES" in os.environ:
+        return Runtime()
+    return Runtime(caches=DEFAULT_RUNTIME_CACHES)
+
+
+_DEFAULT_RUNTIME = _new_default_runtime()
 _DEFAULT_ENVIRONMENTS: dict[tuple[str, tuple[str, ...]], Environment] = {}
 _DEFAULT_ENVIRONMENTS_LOCK = threading.Lock()
 
