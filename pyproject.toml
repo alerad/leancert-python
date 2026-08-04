@@ -37,7 +37,7 @@ classifiers = [
 ]
 requires-python = ">=3.10"
 dependencies = [
-    "lean-runtime>=1.0.1,<2.0.0",
+    "lean-runtime>=1.0.0,<2.0.0",
     "numpy>=1.20.0",
 ]
 
