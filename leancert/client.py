@@ -49,7 +49,7 @@ def _bridge_core_expression(value: dict[str, Any]) -> dict[str, Any]:
 
 
 DEFAULT_BRIDGE_PACKAGE_REF = (
-    "github:alerad/leancert-bridge@a3d6644186d20ffc4959373d08e4a2f33f0adaf1"
+    "github:alerad/leancert-bridge@f2a7c7320108919d93c08604a558524ea3c26ab3"
 )
 DEFAULT_RUNTIME_CACHES = (
     "oci://ghcr.io/alerad/leancert-runtime",
