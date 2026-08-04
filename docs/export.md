@@ -41,6 +41,16 @@ dedicated exact-logical Lean renderer is available.
 This is a second verification event. It does not change the original bridge
 result from `compiled_checker` into a kernel result.
 
+If the proof was produced with a `Runtime` using a non-default cache root or
+backend, pass that same instance when verifying the export:
+
+```python
+export = result.export_lean_project("verified-sine", runtime=runtime)
+```
+
+The environment identity stays authoritative; the explicit runtime only tells
+the SDK where to reopen it.
+
 Project creation is atomic. LeanCert writes and, when requested, builds a
 temporary sibling directory before publishing the final path. Build rejection,
 missing tooling, and the typed `ExportResourceLimit` timeout outcome leave no
@@ -89,8 +99,9 @@ leancert verify exported_proofs/ --format json
 ```
 
 Verification first validates the artifact envelope and its semantic claim
-digest. It then runs the pinned project's explicit `LeanCertExport` target.
-The numerical search and Python proving operation are not rerun.
+digest. It then reopens the exact originating `lean-runtime` environment and
+kernel-checks `LeanCertExport.lean` in a disposable instance. The numerical
+search and Python proving operation are not rerun.
 
 The command uses stable exit codes:
 
@@ -102,8 +113,8 @@ The command uses stable exit codes:
 | `3` | Required verification infrastructure was unavailable |
 | `4` | A rebuild exceeded its resource limit |
 
-Use `--timeout SECONDS` to set the per-project build limit, `--lake PATH` to
-select a Lake executable, and `--fail-fast` to stop after the first failure.
+Use `--timeout SECONDS` to set the per-project check limit and `--fail-fast` to
+stop after the first failure.
 JSON reports use schema `leancert-verification-report/1` and include each
 artifact's claim identifier, certificate digests, trust class, result, timing,
 and captured build output.

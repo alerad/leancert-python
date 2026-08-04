@@ -8,7 +8,6 @@ Tests for adaptive verification expansions:
 - Volume-based termination
 """
 
-import sys
 import threading
 import time
 from fractions import Fraction
@@ -100,7 +99,7 @@ class TestParallelVerification:
         assert len(result.failed_subdomains) > 0
 
     def test_parallel_workers_use_distinct_bridge_clients(self):
-        source_client = LeanClient(binary_path=sys.executable)
+        source_client = LeanClient()
         solver = Solver(client=source_client)
         verifier = CEGARVerifier(
             solver,

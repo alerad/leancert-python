@@ -4,21 +4,26 @@
 """
 Low-level client for communication with the Lean kernel.
 
-This module handles subprocess management and the line-delimited JSON protocol.
+This module handles managed Lean execution and the line-delimited JSON protocol.
 It should not be used directly by end users - use the Solver class instead.
 """
 
 from __future__ import annotations
 
 import json
-import os
-import shutil
-import subprocess
 import threading
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from fractions import Fraction
 from pathlib import Path
 from typing import Any
+
+from lean_runtime import (
+    Environment,
+    ExecutionPolicy,
+    ExecutionResult,
+    InteractiveSession,
+    Runtime,
+)
 
 from .domain import Interval
 from .enclosures import EnclosureEnvironment, EnclosureProfile
@@ -38,14 +43,25 @@ def _bridge_core_expression(value: dict[str, Any]) -> dict[str, Any]:
     return lower_bridge_expression(value)
 
 
+DEFAULT_BRIDGE_PACKAGE_REF = (
+    "github:alerad/leancert-bridge@2e7ca6faff2034ae36a4c0d7e5278a42ef496c90"
+)
+DEFAULT_BRIDGE_COMMAND = ("lake", "exe", "@LeanCertBridge/lean_bridge")
+
+_DEFAULT_RUNTIME = Runtime()
+_DEFAULT_ENVIRONMENTS: dict[str, Environment] = {}
+_DEFAULT_ENVIRONMENTS_LOCK = threading.Lock()
+
+
 class LeanClient:
     """
     Low-level client for the Lean math kernel.
 
-    Uses a subprocess to communicate with the compiled lean_bridge executable
-    via a versioned line-delimited JSON protocol over stdin/stdout.
+    Uses :mod:`lean_runtime` to resolve, build, cache, and execute the Bridge in
+    a content-addressed environment. Communication uses the Bridge's versioned
+    line-delimited JSON protocol over a managed interactive session.
 
-    This class manages the subprocess lifecycle and should be used as a
+    This class manages the interactive-session lifecycle and should be used as a
     context manager to ensure proper cleanup.
 
     Example:
@@ -55,26 +71,47 @@ class LeanClient:
 
     def __init__(
         self,
-        binary_path: str | None = None,
+        package_ref: str = DEFAULT_BRIDGE_PACKAGE_REF,
         *,
+        runtime: Runtime | None = None,
+        environment: Environment | None = None,
+        execution_policy: ExecutionPolicy | None = None,
+        command: Sequence[str] = DEFAULT_BRIDGE_COMMAND,
         enclosure_profile: str | Path | EnclosureProfile | None = None,
-        project_dir: str | Path | None = None,
     ):
         """
         Initialize the client.
 
         Args:
-            binary_path: Path to lean_bridge executable. If None, searches
-                        for it in standard locations.
+            package_ref: Exact Bridge Git reference managed by ``lean-runtime``.
+            runtime: Optional runtime instance, useful for a custom cache/backend.
+            environment: Optional pre-built environment. This is the extension
+                point for downstream profiled Bridge executables.
+            execution_policy: Resource policy for the interactive Bridge session.
+            command: Command to start inside the managed environment.
         """
-        self.binary_path = self._find_binary(binary_path)
+        if not package_ref:
+            raise ValueError("package_ref must not be empty")
+        if not command or any(not isinstance(part, str) or not part for part in command):
+            raise ValueError("command must contain non-empty strings")
+        self.package_ref = package_ref
+        self.runtime = runtime or _DEFAULT_RUNTIME
+        self._uses_default_runtime = runtime is None and environment is None
+        self._environment = environment
+        self.execution_policy = execution_policy or ExecutionPolicy(
+            timeout_seconds=3600,
+            max_output_bytes=10_000_000,
+        )
+        self.command = tuple(command)
         self.enclosure_profile = (
             enclosure_profile
             if isinstance(enclosure_profile, EnclosureProfile)
-            else None if enclosure_profile is None else EnclosureProfile.load(enclosure_profile)
+            else None
+            if enclosure_profile is None
+            else EnclosureProfile.load(enclosure_profile)
         )
-        self.project_dir = None if project_dir is None else Path(project_dir).expanduser().resolve()
-        self._process: subprocess.Popen | None = None
+        self._session: InteractiveSession | None = None
+        self.execution_result: ExecutionResult | None = None
         self._request_id = 0
         self._contract_checked = False
         self._bridge_info: dict[str, Any] | None = None
@@ -82,75 +119,45 @@ class LeanClient:
         self._io_lock = threading.RLock()
         self._enclosures: EnclosureEnvironment | None = None
 
-    def _find_binary(self, binary_path: str | None) -> str:
-        """Find the lean_bridge binary."""
-        if binary_path and os.path.isfile(binary_path):
-            return str(Path(binary_path).expanduser().resolve())
+    @property
+    def environment(self) -> Environment:
+        """Return the exact managed environment, resolving it on first use."""
+        if self._environment is None:
+            if self._uses_default_runtime:
+                with _DEFAULT_ENVIRONMENTS_LOCK:
+                    self._environment = _DEFAULT_ENVIRONMENTS.get(self.package_ref)
+                    if self._environment is None:
+                        self._environment = self.runtime.ensure_references([self.package_ref])
+                        _DEFAULT_ENVIRONMENTS[self.package_ref] = self._environment
+            else:
+                self._environment = self.runtime.ensure_references([self.package_ref])
+        return self._environment
 
-        env_binary = os.getenv("LEANCERT_BRIDGE_PATH")
-        if env_binary and os.path.isfile(env_binary):
-            return str(Path(env_binary).expanduser().resolve())
+    @property
+    def environment_id(self) -> str:
+        return self.environment.id
 
-        import sys
+    @property
+    def execution_id(self) -> str | None:
+        return None if self._session is None else self._session.execution_id
 
-        module_dir = Path(__file__).parent
-
-        # Platform-specific binary name
-        binary_name = "lean_bridge.exe" if sys.platform == "win32" else "lean_bridge"
-
-        # Search order:
-        # 1. Bundled with package (pip install leancert)
-        # 2. Local repo build output
-        # 3. System PATH
-        candidates = [
-            # Bundled binary (installed via pip)
-            module_dir / "bin" / binary_name,
-            # Development: leancert-python/.lake/build/bin
-            module_dir.parent / ".lake" / "build" / "bin" / binary_name,
-            # From current working directory
-            Path.cwd() / ".lake" / "build" / "bin" / binary_name,
-        ]
-
-        for candidate in candidates:
-            if candidate.is_file():
-                return str(candidate.resolve())
-
-        # Try PATH
-        path_binary = shutil.which("lean_bridge")
-        if path_binary:
-            return path_binary
-
-        raise FileNotFoundError(
-            "Could not find lean_bridge binary. "
-            "Install with 'pip install leancert' (includes pre-built binary) "
-            "or set LEANCERT_BRIDGE_PATH to a built bridge binary."
-        )
-
-    def _ensure_process(self) -> subprocess.Popen:
-        """Ensure the subprocess is running."""
-        if self._process is None or self._process.poll() is not None:
+    def _ensure_session(self) -> InteractiveSession:
+        """Ensure the managed interactive Bridge session is running."""
+        if self._session is None or not self._session.running:
+            if self._session is not None:
+                self.execution_result = self._session.close()
             self._contract_checked = False
             self._bridge_info = None
             self._bridge_contract = None
             self._enclosures = None
-            command = [self.binary_path]
+            command = list(self.command)
             if self.enclosure_profile is not None:
                 command.extend(["--enclosure-profile", str(self.enclosure_profile.path)])
-            if self.project_dir is not None:
-                lake = shutil.which("lake")
-                if lake is None:
-                    raise FileNotFoundError("project_dir requires the Lake executable on PATH")
-                command = [lake, "env", *command]
-            self._process = subprocess.Popen(
+            self._session = self.environment.spawn_interactive(
                 command,
-                cwd=None if self.project_dir is None else self.project_dir,
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                bufsize=1,
+                policy=self.execution_policy,
             )
-        return self._process
+        return self._session
 
     def _check_bridge_contract(self) -> None:
         """Verify bridge API compatibility once per process lifecycle."""
@@ -179,7 +186,7 @@ class LeanClient:
         Raises:
             BridgeError: If the call fails.
         """
-        proc = self._ensure_process()
+        session = self._ensure_session()
 
         self._request_id += 1
         request = {
@@ -195,16 +202,19 @@ class LeanClient:
             )
         except (TypeError, ValueError) as exc:
             raise ProtocolViolation(f"Request is not valid JSON data: {exc}") from exc
-        assert proc.stdin is not None
-        proc.stdin.write(request_json + "\n")
-        proc.stdin.flush()
+        session.stdin.write(request_json + "\n")
+        session.stdin.flush()
 
         # Read response
-        assert proc.stdout is not None
-        response_line = proc.stdout.readline()
+        response_line = session.stdout.readline()
         if not response_line:
-            stderr = proc.stderr.read() if proc.stderr else ""
-            raise BridgeError(f"Bridge process died. stderr: {stderr}")
+            result = session.close()
+            self.execution_result = result
+            self._session = None
+            detail = result.stderr or result.stdout
+            raise BridgeError(
+                f"Bridge session ended unexpectedly with exit code {result.exit_code}: {detail}"
+            )
 
         try:
             response = json.loads(response_line)
@@ -300,7 +310,9 @@ class LeanClient:
         contract = self.bridge_contract
         assert contract.enclosure_profile is not None
         if self._enclosures is None:
-            self._enclosures = EnclosureEnvironment(self.enclosure_profile, contract.enclosure_profile)
+            self._enclosures = EnclosureEnvironment(
+                self.enclosure_profile, contract.enclosure_profile
+            )
         return self._enclosures
 
     def check_registered_enclosure(self, params: dict[str, Any]) -> dict[str, Any]:
@@ -1020,25 +1032,15 @@ class LeanClient:
         )
 
     def close(self) -> None:
-        """Close the subprocess."""
+        """Close the managed session and retain its exact execution result."""
         with self._io_lock:
-            if self._process is not None:
-                process = self._process
-                try:
-                    process.terminate()
-                    process.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    process.kill()
-                    process.wait()
-                finally:
-                    for stream in (process.stdin, process.stdout, process.stderr):
-                        if stream is not None:
-                            stream.close()
-                    self._process = None
-                    self._bridge_info = None
-                    self._bridge_contract = None
-                    self._enclosures = None
-                    self._contract_checked = False
+            if self._session is not None:
+                self.execution_result = self._session.close()
+                self._session = None
+            self._bridge_info = None
+            self._bridge_contract = None
+            self._enclosures = None
+            self._contract_checked = False
 
     def __enter__(self) -> LeanClient:
         """Context manager entry."""
