@@ -49,7 +49,7 @@ def test_doctor_accepts_release_contract_2_2():
     report = diagnose(client_factory=FakeClient)
     assert report.healthy
     assert {check.name for check in report.checks} == {
-        "environment",
+        "execution_target",
         "contract",
         "replayable_bounds",
         "checked_adaptive",
@@ -57,14 +57,14 @@ def test_doctor_accepts_release_contract_2_2():
     }
 
 
-def test_doctor_reports_missing_environment_without_throwing():
+def test_doctor_reports_missing_execution_target_without_throwing():
     class Missing:
         def __init__(self, **kwargs):
             raise FileNotFoundError("no bridge")
 
     report = diagnose(client_factory=Missing)
     assert not report.healthy
-    assert report.checks[0].name == "environment"
+    assert report.checks[0].name == "execution_target"
 
 
 def test_doctor_cli_json_exit_status(monkeypatch, capsys):
