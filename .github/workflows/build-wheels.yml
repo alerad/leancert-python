@@ -1,7 +1,7 @@
 name: Build Python distributions
 
 env:
-  LEAN_RUNTIME_REVISION: 198f37308133a722f965c2543b69dcf1b3fb164f
+  LEAN_RUNTIME_VERSION: 2.0.0
 
 on:
   push:
@@ -27,7 +27,7 @@ jobs:
           python-version: '3.11'
       - run: >-
           pip install
-          "git+https://github.com/alerad/lean-runtime.git@${LEAN_RUNTIME_REVISION}"
+          "lean-runtime==${LEAN_RUNTIME_VERSION}"
       - run: pip install -e '.[dev]'
       - name: Run Bridge-independent safety and contract tests
         run: >-
@@ -99,7 +99,7 @@ jobs:
         shell: bash
         run: >-
           pip install
-          "git+https://github.com/alerad/lean-runtime.git@${LEAN_RUNTIME_REVISION}"
+          "lean-runtime==${LEAN_RUNTIME_VERSION}"
       - name: Install wheel
         shell: bash
         run: pip install dist/*.whl
@@ -142,7 +142,7 @@ jobs:
         shell: bash
         run: >-
           pip install
-          "git+https://github.com/alerad/lean-runtime.git@${LEAN_RUNTIME_REVISION}"
+          "lean-runtime==${LEAN_RUNTIME_VERSION}"
       - name: Install the built SDK
         shell: bash
         run: pip install dist/*.whl
