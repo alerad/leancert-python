@@ -1,7 +1,7 @@
 name: Build Python distributions
 
 env:
-  LEAN_RUNTIME_REVISION: 9e16b67737bc110c89461b90f014bb8db82b1f78
+  LEAN_RUNTIME_REVISION: f995abe15851fe211a9e6f6d1541d3f60a037145
 
 on:
   push:
@@ -95,7 +95,7 @@ jobs:
         with:
           name: distributions
           path: dist
-      - name: Install capsule-capable runtime
+      - name: Install ready-program runtime
         shell: bash
         run: >-
           pip install
@@ -112,17 +112,17 @@ jobs:
           import leancert
           from leancert.client import (
               DEFAULT_BRIDGE_PACKAGE_REF,
-              DEFAULT_BRIDGE_CAPSULE_REPOSITORY,
+              DEFAULT_BRIDGE_PROGRAM_LIBRARY,
               LeanClient,
           )
 
           client = LeanClient()
-          assert version("lean-runtime").split(".", 1)[0] == "1"
+          assert version("lean-runtime").split(".", 1)[0] == "2"
           assert client.package_ref == DEFAULT_BRIDGE_PACKAGE_REF
-          assert DEFAULT_BRIDGE_CAPSULE_REPOSITORY.endswith("leancert-bridge-capsules")
+          assert DEFAULT_BRIDGE_PROGRAM_LIBRARY.endswith("leancert-bridge-programs")
           assert client.execution_id is None
           assert client._environment is None
-          assert client._capsule is None
+          assert client._program is None
           print("pure Python managed-runtime wheel smoke test passed")
           PY
 
@@ -138,7 +138,7 @@ jobs:
         with:
           name: distributions
           path: dist
-      - name: Install capsule-capable runtime
+      - name: Install ready-program runtime
         shell: bash
         run: >-
           pip install
@@ -146,10 +146,10 @@ jobs:
       - name: Install the built SDK
         shell: bash
         run: pip install dist/*.whl
-      - name: Prove through the published thin capsule
+      - name: Prove through the published ready-to-run program
         shell: bash
         env:
-          LEAN_RUNTIME_PREBUILT: require
+          LEAN_RUNTIME_AVAILABILITY: required
         run: |
           python - <<'PY'
           import leancert as lc
@@ -157,11 +157,11 @@ jobs:
           x = lc.ast.var("x")
           result = lc.prove(x * x <= 1, where={x: (-1, 1)})
           assert isinstance(result, lc.Verified), result
-          assert result.provenance.execution_route == "capsule"
+          assert result.provenance.execution_route == "program"
           assert result.provenance.environment_id is None
-          assert result.provenance.capsule_id.startswith("capsule_")
+          assert result.provenance.program_id.startswith("program_")
           assert result.provenance.execution_id.startswith("execution_")
-          print(result.provenance.capsule_id)
+          print(result.provenance.program_id)
           PY
 
   publish:
@@ -176,7 +176,7 @@ jobs:
           name: distributions
           path: dist
       - name: Require the managed runtime release on PyPI
-        run: pip install 'lean-runtime>=1.1.0,<2.0.0'
+        run: pip install 'lean-runtime>=2.0.0,<3.0.0'
       - uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: dist/

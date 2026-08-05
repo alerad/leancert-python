@@ -17,7 +17,7 @@ class FakeClient:
         self.package_ref = package_ref
         self.closed = False
         self.environment_id = "env_" + "a" * 64
-        self.capsule_id = None
+        self.program_id = None
         self.execution_id = "execution_" + "b" * 64
         self._info = json.loads((FIXTURES / "bridge-contract-2.1" / "handshake.json").read_text())
         self._info["bridge_api_version"] = "2.2.0"

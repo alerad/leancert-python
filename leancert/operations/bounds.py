@@ -204,7 +204,7 @@ def bridge_provenance(client: Any) -> BridgeProvenance:
         # Structural test/dry-run clients may expose a plain environment field;
         # avoid touching LeanClient.environment because that property hydrates.
         environment = vars(client).get("environment")
-    capsule = getattr(client, "_capsule", None)
+    program = getattr(client, "_program", None)
     lock = getattr(environment, "lock", None)
     packages = () if lock is None else lock.packages
 
@@ -216,9 +216,9 @@ def bridge_provenance(client: Any) -> BridgeProvenance:
     return BridgeProvenance(
         environment_id=getattr(environment, "id", None),
         execution_id=getattr(client, "execution_id", None),
-        execution_route="capsule" if capsule is not None else "environment",
-        capsule_id=getattr(capsule, "id", None),
-        capsule_manifest_digest=getattr(capsule, "manifest_digest", None),
+        execution_route="program" if program is not None else "environment",
+        program_id=getattr(program, "id", None),
+        program_copy_id=getattr(program, "copy_id", None),
         runtime_package_ref=getattr(client, "package_ref", None),
         environment_lock_id=None if lock is None else lock.lock_id,
         bridge_api_version=info.get("bridge_api_version"),
@@ -227,7 +227,7 @@ def bridge_provenance(client: Any) -> BridgeProvenance:
         lean_version=info.get("lean_version"),
         leancert_version=info.get("leancert_version"),
         capability_digest=contract.capability_digest,
-        lean_toolchain=getattr(getattr(capsule, "manifest", None), "toolchain", None)
+        lean_toolchain=getattr(getattr(program, "description", None), "toolchain", None)
         or (
             dependencies.lean_toolchain
             if lock is None and dependencies is not None

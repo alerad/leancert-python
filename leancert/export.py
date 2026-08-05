@@ -434,9 +434,9 @@ def _verify_in_managed_environment(
     try:
         selected_runtime = runtime or Runtime()
         if provenance.environment_id:
-            environment = selected_runtime.open(provenance.environment_id)
+            environment = selected_runtime.environment(provenance.environment_id)
         elif provenance.runtime_package_ref:
-            environment = selected_runtime.ensure_references(
+            environment = selected_runtime.open_references(
                 [provenance.runtime_package_ref], timeout=3600
             )
         else:

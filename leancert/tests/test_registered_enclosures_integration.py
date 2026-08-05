@@ -27,7 +27,7 @@ def test_profiled_bridge_discovery_and_fixed_replay():
     runtime = Runtime()
     with lc.Solver(
         runtime=runtime,
-        environment=runtime.open(os.environ["LEANCERT_ENVIRONMENT_ID"]),
+        environment=runtime.environment(os.environ["LEANCERT_ENVIRONMENT_ID"]),
         command=tuple(os.environ["LEANCERT_ENCLOSURE_COMMAND"].split()),
         enclosure_profile=os.environ["LEANCERT_ENCLOSURE_PROFILE"],
     ) as solver:

@@ -445,9 +445,7 @@ def _validate_project(path: Path, required_trust: str | None) -> _ValidatedArtif
         ENVIRONMENT_ID_PATTERN.fullmatch(environment_id) is not None
     )
     has_package = isinstance(runtime_package_ref, str) and (
-        re.fullmatch(
-            r"github:alerad/leancert-bridge@[0-9a-f]{40,64}", runtime_package_ref
-        )
+        re.fullmatch(r"github:alerad/leancert-bridge@[0-9a-f]{40,64}", runtime_package_ref)
         is not None
     )
     if not has_environment and not has_package:
@@ -531,10 +529,10 @@ def verify_exported_projects(
             continue
         try:
             if validated.environment_id is not None:
-                environment = selected_runtime.open(validated.environment_id)
+                environment = selected_runtime.environment(validated.environment_id)
             else:
                 assert validated.runtime_package_ref is not None
-                environment = selected_runtime.ensure_references(
+                environment = selected_runtime.open_references(
                     [validated.runtime_package_ref], timeout=timeout
                 )
             execution = environment.check_files(

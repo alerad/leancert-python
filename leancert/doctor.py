@@ -51,13 +51,13 @@ def diagnose(
             info = client.get_info()
             contract = client.bridge_contract
             environment_id = client.environment_id
-            capsule_id = getattr(client, "capsule_id", None)
+            program_id = getattr(client, "program_id", None)
             execution_id = client.execution_id
         except Exception as exc:
             checks.append(DoctorCheck("handshake", False, str(exc)))
             return DoctorReport(tuple(checks), {})
 
-        execution_target = capsule_id or environment_id
+        execution_target = program_id or environment_id
         checks.append(
             DoctorCheck(
                 "environment",

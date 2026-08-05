@@ -44,7 +44,7 @@ class FakeRuntime:
         self.missing = missing
         self.checked = []
 
-    def open(self, environment_id):
+    def environment(self, environment_id):
         if self.missing:
             raise EnvironmentError("managed environment is absent")
         assert environment_id == "env_" + "a" * 64
