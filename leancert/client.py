@@ -23,6 +23,7 @@ from typing import Any
 
 from lean_runtime import (
     Environment,
+    ExecutionCapsule,
     ExecutionPolicy,
     ExecutionResult,
     InteractiveSession,
@@ -49,18 +50,17 @@ def _bridge_core_expression(value: dict[str, Any]) -> dict[str, Any]:
 
 
 DEFAULT_BRIDGE_PACKAGE_REF = (
-    "github:alerad/leancert-bridge@8dcdec8c4a37f2e9a533d486582beed381e904f1"
+    "github:alerad/leancert-bridge@941c26b08cfbb89404a3c1d8149a0466637a7ee9"
 )
+DEFAULT_BRIDGE_SOURCE_REVISION = "941c26b08cfbb89404a3c1d8149a0466637a7ee9"
+DEFAULT_BRIDGE_CAPSULE_REPOSITORY = "oci://ghcr.io/alerad/leancert-bridge-capsules"
+DEFAULT_BRIDGE_CAPSULE_REFERENCE = f"revision-{DEFAULT_BRIDGE_SOURCE_REVISION}"
 DEFAULT_RUNTIME_CACHES = (
     "oci://ghcr.io/alerad/leancert-runtime",
     "oci://ghcr.io/alerad/lean-runtime-cache",
 )
 DEFAULT_BRIDGE_COMMAND = ("lake", "exe", "@LeanCertBridge/lean_bridge")
-DEFAULT_ARTIFACT_COMMAND = (
-    "lake",
-    "exe",
-    "@LeanCertBridge/lean_bridge_runtime_prepare",
-)
+DEFAULT_ARTIFACT_COMMAND: tuple[str, ...] = ()
 
 
 def _new_default_runtime() -> Runtime:
@@ -97,11 +97,14 @@ class LeanClient:
         *,
         runtime: Runtime | None = None,
         environment: Environment | None = None,
+        capsule: ExecutionCapsule | None = None,
         execution_policy: ExecutionPolicy | None = None,
         resolution_timeout_seconds: float = 3600,
         artifact_command: Sequence[str] = DEFAULT_ARTIFACT_COMMAND,
         command: Sequence[str] = DEFAULT_BRIDGE_COMMAND,
         enclosure_profile: str | Path | EnclosureProfile | None = None,
+        capsule_repository: str = DEFAULT_BRIDGE_CAPSULE_REPOSITORY,
+        capsule_reference: str = DEFAULT_BRIDGE_CAPSULE_REFERENCE,
     ):
         """
         Initialize the client.
@@ -135,8 +138,13 @@ class LeanClient:
             raise ValueError("resolution_timeout_seconds must be a finite positive number")
         self.package_ref = package_ref
         self.runtime = runtime or _DEFAULT_RUNTIME
-        self._uses_default_runtime = runtime is None and environment is None
+        if environment is not None and capsule is not None:
+            raise ValueError("environment and capsule are mutually exclusive")
+        self._uses_default_runtime = runtime is None and environment is None and capsule is None
         self._environment = environment
+        self._capsule = capsule
+        self.capsule_repository = capsule_repository
+        self.capsule_reference = capsule_reference
         self.execution_policy = execution_policy or ExecutionPolicy(
             timeout_seconds=3600,
             max_output_bytes=10_000_000,
@@ -159,6 +167,24 @@ class LeanClient:
         self._bridge_contract: BridgeHandshake | None = None
         self._io_lock = threading.RLock()
         self._enclosures: EnclosureEnvironment | None = None
+
+    @property
+    def uses_capsule(self) -> bool:
+        """Whether ordinary Bridge execution uses the thin precompiled closure."""
+        return self.enclosure_profile is None and self._environment is None
+
+    @property
+    def capsule(self) -> ExecutionCapsule:
+        """Return the verified thin Bridge capsule, pulling it on first use."""
+        if self.enclosure_profile is not None:
+            raise BridgeError("registered enclosure profiles require a full managed environment")
+        if self._capsule is None:
+            self._capsule = self.runtime.pull_capsule(
+                self.capsule_repository,
+                self.capsule_reference,
+                expected_source_revision=DEFAULT_BRIDGE_SOURCE_REVISION,
+            )
+        return self._capsule
 
     @property
     def environment(self) -> Environment:
@@ -207,8 +233,20 @@ class LeanClient:
         return self.runtime.ensure(lock, name=alias)
 
     @property
-    def environment_id(self) -> str:
-        return self.environment.id
+    def environment_id(self) -> str | None:
+        if self._environment is not None:
+            return self._environment.id
+        if self._capsule is not None:
+            return self._capsule.manifest.source_environment_id
+        return None
+
+    @property
+    def capsule_id(self) -> str | None:
+        return None if self._capsule is None else self._capsule.id
+
+    @property
+    def capsule_manifest_digest(self) -> str | None:
+        return None if self._capsule is None else self._capsule.manifest_digest
 
     @property
     def execution_id(self) -> str | None:
@@ -226,10 +264,13 @@ class LeanClient:
             command = list(self.command)
             if self.enclosure_profile is not None:
                 command.extend(["--enclosure-profile", str(self.enclosure_profile.path)])
-            self._session = self.environment.spawn_interactive(
-                command,
-                policy=self.execution_policy,
-            )
+            if self.enclosure_profile is None and self._environment is None:
+                self._session = self.capsule.spawn_interactive(policy=self.execution_policy)
+            else:
+                self._session = self.environment.spawn_interactive(
+                    command,
+                    policy=self.execution_policy,
+                )
         return self._session
 
     def _check_bridge_contract(self) -> None:

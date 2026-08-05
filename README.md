@@ -18,14 +18,17 @@ Write Python, get mathematical proofs. LeanCert proves properties about your cod
 pip install leancert
 ```
 
-The wheel is pure Python. On the first checked operation, `lean-runtime`
-resolves the SDK's exact `leancert-bridge` Git revision and first checks the
-platform-aware `oci://ghcr.io/alerad/leancert-runtime` cache. A cache hit
-downloads and verifies the already-built LeanCert, Mathlib, and Bridge package
-layers; a miss falls back to the exact source build. The runtime installs the
-declared Lean toolchain if necessary and starts a managed interactive session.
-Later runs reuse the content-addressed environment; no Bridge binary path or
-system-wide Lean installation is needed.
+The wheel is pure Python. On the first checked operation, `lean-runtime` pulls
+the platform-specific, content-addressed Bridge execution capsule from
+`oci://ghcr.io/alerad/leancert-bridge-capsules`. The capsule contains the
+precompiled Bridge and its runtime libraries, not a Mathlib source/build tree.
+Later calls reuse it; no Bridge path or system-wide Lean installation is needed.
+
+Full LeanCert and Mathlib environments are hydrated lazily only for independent
+kernel replay, source rebuild audits, or custom registered-enclosure profiles.
+Those environments remain distinct from capsules in result provenance: a
+capsule establishes `compiled_checker`, while successful exported proof replay
+establishes `kernel_replay`.
 
 Set `LEAN_RUNTIME_PREBUILT=require` when CI must use a published environment,
 or `LEAN_RUNTIME_PREBUILT=never` to audit the source-build path. An explicit

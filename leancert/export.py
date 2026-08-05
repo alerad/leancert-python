@@ -6,7 +6,7 @@ import json
 import re
 import shutil
 import tempfile
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from fractions import Fraction
 from pathlib import Path
 from typing import Any
@@ -431,10 +431,18 @@ def _verify_in_managed_environment(
     runtime: Runtime | None = None,
 ):
     """Kernel-check one generated source in the exact originating environment."""
-    if not provenance.environment_id:
-        return ExportUnsupported("proof provenance lacks a lean-runtime environment identity")
     try:
-        environment = (runtime or Runtime()).open(provenance.environment_id)
+        selected_runtime = runtime or Runtime()
+        if provenance.environment_id:
+            environment = selected_runtime.open(provenance.environment_id)
+        elif provenance.runtime_package_ref:
+            environment = selected_runtime.ensure_references(
+                [provenance.runtime_package_ref], timeout=3600
+            )
+        else:
+            return ExportUnsupported(
+                "proof provenance lacks a replay environment or exact package reference"
+            )
         result = environment.check_files(
             {"LeanCertExport.lean": lean_source},
             entrypoint="LeanCertExport.lean",
@@ -458,7 +466,10 @@ def _verify_in_managed_environment(
             "exported source did not kernel-check",
             output,
         )
-    return output
+    environment_id = getattr(environment, "id", provenance.environment_id)
+    lock = getattr(environment, "lock", None)
+    lock_id = getattr(lock, "lock_id", provenance.environment_lock_id)
+    return output, environment_id, lock_id
 
 
 def export_verified_bound(
@@ -572,9 +583,18 @@ def export_verified_bound(
             checked = _verify_in_managed_environment(
                 provenance, lean_source, artifact, runtime=runtime
             )
-            if not isinstance(checked, str):
+            if not isinstance(checked, tuple):
                 return checked
-            verification_output = checked
+            verification_output, environment_id, lock_id = checked
+            provenance = replace(
+                provenance,
+                environment_id=environment_id,
+                environment_lock_id=lock_id,
+            )
+            (staging / "provenance.json").write_text(
+                json.dumps(_jsonable(asdict(provenance)), indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
         staging.rename(output)
         staging = output
         if not verify:
@@ -791,9 +811,18 @@ def export_verified_system_root(
             checked = _verify_in_managed_environment(
                 provenance, lean_source, artifact, runtime=runtime
             )
-            if not isinstance(checked, str):
+            if not isinstance(checked, tuple):
                 return checked
-            verification_output = checked
+            verification_output, environment_id, lock_id = checked
+            provenance = replace(
+                provenance,
+                environment_id=environment_id,
+                environment_lock_id=lock_id,
+            )
+            (staging / "provenance.json").write_text(
+                json.dumps(_jsonable(asdict(provenance)), indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
         staging.rename(output)
         staging = output
         if not verify:
@@ -931,9 +960,18 @@ def export_verified_eventual_bound(
             checked = _verify_in_managed_environment(
                 provenance, lean_source, artifact, runtime=runtime
             )
-            if not isinstance(checked, str):
+            if not isinstance(checked, tuple):
                 return checked
-            verification_output = checked
+            verification_output, environment_id, lock_id = checked
+            provenance = replace(
+                provenance,
+                environment_id=environment_id,
+                environment_lock_id=lock_id,
+            )
+            (staging / "provenance.json").write_text(
+                json.dumps(_jsonable(asdict(provenance)), indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
         staging.rename(output)
         staging = output
         if not verify:
@@ -1137,9 +1175,18 @@ def export_verified_scalar_root(
             checked = _verify_in_managed_environment(
                 provenance, lean_source, artifact, runtime=runtime
             )
-            if not isinstance(checked, str):
+            if not isinstance(checked, tuple):
                 return checked
-            verification_output = checked
+            verification_output, environment_id, lock_id = checked
+            provenance = replace(
+                provenance,
+                environment_id=environment_id,
+                environment_lock_id=lock_id,
+            )
+            (staging / "provenance.json").write_text(
+                json.dumps(_jsonable(asdict(provenance)), indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
         staging.rename(output)
         staging = output
         if not verify:
@@ -1342,9 +1389,18 @@ def export_verified_integral(
             checked = _verify_in_managed_environment(
                 provenance, lean_source, artifact, runtime=runtime
             )
-            if not isinstance(checked, str):
+            if not isinstance(checked, tuple):
                 return checked
-            verification_output = checked
+            verification_output, environment_id, lock_id = checked
+            provenance = replace(
+                provenance,
+                environment_id=environment_id,
+                environment_lock_id=lock_id,
+            )
+            (staging / "provenance.json").write_text(
+                json.dumps(_jsonable(asdict(provenance)), indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
         staging.rename(output)
         staging = output
         if not verify:

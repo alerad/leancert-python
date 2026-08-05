@@ -319,3 +319,41 @@ def test_export_timeout_is_typed_and_atomic(tmp_path, monkeypatch):
     assert exported.build_output == "still building"
     assert not (tmp_path / "proof").exists()
     assert not list(tmp_path.glob(".proof.*"))
+
+
+def test_capsule_result_hydrates_full_environment_only_for_kernel_replay(tmp_path):
+    x = ast.var("x")
+    client = ReplayClient((response(),))
+    del client.environment
+    client.package_ref = "github:alerad/leancert-bridge@" + "c" * 40
+    client._environment = None
+    client._capsule = SimpleNamespace(
+        id="capsule_" + "d" * 64,
+        manifest_digest="sha256:" + "e" * 64,
+        manifest=SimpleNamespace(toolchain="leanprover/lean4:v4.32.2"),
+    )
+    result = lc.prove(x <= 1, where={x: (0, 1)}, client=client)
+    assert result.provenance.environment_id is None
+    assert result.provenance.execution_route == "capsule"
+
+    observed = {}
+    environment = SimpleNamespace(
+        id="env_" + "f" * 64,
+        lock=SimpleNamespace(lock_id="lock_" + "1" * 64),
+        check_files=lambda *args, **kwargs: SimpleNamespace(
+            ok=True, timed_out=False, stdout="kernel checked", stderr=""
+        ),
+    )
+
+    class Runtime:
+        def ensure_references(self, references, *, timeout):
+            observed["references"] = references
+            observed["timeout"] = timeout
+            return environment
+
+    exported = result.export_lean_project(str(tmp_path / "capsule-proof"), runtime=Runtime())
+    assert isinstance(exported, lc.ExportVerified)
+    assert observed == {"references": [client.package_ref], "timeout": 3600}
+    provenance = json.loads((tmp_path / "capsule-proof" / "provenance.json").read_text())
+    assert provenance["capsule_id"] == client._capsule.id
+    assert provenance["environment_id"] == environment.id

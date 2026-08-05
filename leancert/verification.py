@@ -149,7 +149,8 @@ class _ValidatedArtifact:
     trust_class: str
     target: str
     certificate_digests: tuple[str, ...]
-    environment_id: str
+    environment_id: str | None
+    runtime_package_ref: str | None
 
 
 def _object_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -433,17 +434,26 @@ def _validate_project(path: Path, required_trust: str | None) -> _ValidatedArtif
     source = provenance.get("leancert_source")
     revision = provenance.get("leancert_resolved_revision")
     environment_id = provenance.get("environment_id")
+    runtime_package_ref = provenance.get("runtime_package_ref")
     if not isinstance(toolchain, str) or TOOLCHAIN_PATTERN.fullmatch(toolchain) is None:
         raise ArtifactValidationError("provenance does not pin a released Lean toolchain")
     if source != "https://github.com/alerad/leancert.git":
         raise ArtifactValidationError("provenance does not use the canonical LeanCert source")
     if not isinstance(revision, str) or REVISION_PATTERN.fullmatch(revision) is None:
         raise ArtifactValidationError("provenance does not pin a full LeanCert revision")
-    if (
-        not isinstance(environment_id, str)
-        or ENVIRONMENT_ID_PATTERN.fullmatch(environment_id) is None
-    ):
-        raise ArtifactValidationError("provenance does not pin a lean-runtime environment")
+    has_environment = isinstance(environment_id, str) and (
+        ENVIRONMENT_ID_PATTERN.fullmatch(environment_id) is not None
+    )
+    has_package = isinstance(runtime_package_ref, str) and (
+        re.fullmatch(
+            r"github:alerad/leancert-bridge@[0-9a-f]{40,64}", runtime_package_ref
+        )
+        is not None
+    )
+    if not has_environment and not has_package:
+        raise ArtifactValidationError(
+            "provenance pins neither a runtime environment nor an exact Bridge package"
+        )
     if _read_text(path / "lean-toolchain").strip() != toolchain:
         raise ArtifactValidationError("lean-toolchain disagrees with provenance")
     lakefile = _read_text(path / "lakefile.toml")
@@ -460,7 +470,8 @@ def _validate_project(path: Path, required_trust: str | None) -> _ValidatedArtif
         trust_class,
         manifest["target"],
         certificate_digests,
-        environment_id,
+        environment_id if has_environment else None,
+        runtime_package_ref if has_package else None,
     )
 
 
@@ -519,7 +530,13 @@ def verify_exported_projects(
                 break
             continue
         try:
-            environment = selected_runtime.open(validated.environment_id)
+            if validated.environment_id is not None:
+                environment = selected_runtime.open(validated.environment_id)
+            else:
+                assert validated.runtime_package_ref is not None
+                environment = selected_runtime.ensure_references(
+                    [validated.runtime_package_ref], timeout=timeout
+                )
             execution = environment.check_files(
                 {"LeanCertExport.lean": _read_text(project / "LeanCertExport.lean")},
                 entrypoint="LeanCertExport.lean",

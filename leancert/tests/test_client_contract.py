@@ -42,6 +42,9 @@ def raw_client(responses: str) -> LeanClient:
     }
     client._bridge_contract = BridgeHandshake.parse(client._bridge_info)
     client._io_lock = threading.RLock()
+    client._environment = None
+    client._capsule = None
+    client.package_ref = "github:a/b@" + "a" * 40
     return client
 
 
@@ -96,7 +99,8 @@ def test_environment_resolution_is_lazy():
     runtime = FakeRuntime()
     client = LeanClient(package_ref="github:a/b@v1", runtime=runtime, artifact_command=())
     assert runtime.calls == []
-    assert client.environment_id == "environment_test"
+    assert client.environment_id is None
+    assert client.environment.id == "environment_test"
     assert runtime.calls == [(["github:a/b@v1"], 3600.0)]
 
 
@@ -167,7 +171,7 @@ def test_environment_resolution_timeout_is_configurable():
         resolution_timeout_seconds=7200,
         artifact_command=(),
     )
-    assert client.environment_id == "environment_test"
+    assert client.environment.id == "environment_test"
     assert runtime.timeout == 7200.0
 
 
@@ -209,8 +213,12 @@ def test_artifact_hydration_is_part_of_the_managed_environment_lock():
             return SimpleNamespace(id="environment_hydrated")
 
     runtime = FakeRuntime()
-    client = LeanClient(package_ref="github:a/b@v1", runtime=runtime)
-    assert client.environment_id == "environment_hydrated"
+    client = LeanClient(
+        package_ref="github:a/b@v1",
+        runtime=runtime,
+        artifact_command=("lake", "exe", "@LeanCertBridge/lean_bridge_runtime_prepare"),
+    )
+    assert client.environment.id == "environment_hydrated"
     spec, timeout = runtime.resolved
     assert spec.packages[0].artifact_command == (
         "lake",
@@ -231,7 +239,9 @@ def test_named_managed_environment_reopens_without_resolution():
         def spec_from_references(self, references):
             raise AssertionError("a named cache hit must not resolve references")
 
-    client = LeanClient(package_ref="github:a/b@v1", runtime=FakeRuntime())
+    client = LeanClient(
+        package_ref="github:a/b@v1", runtime=FakeRuntime(), artifact_command=("hydrate",)
+    )
     assert client.environment is environment
 
 
@@ -249,6 +259,40 @@ def test_injected_environment_starts_managed_session():
     client = LeanClient(environment=FakeEnvironment())
     assert client.ping() == "pong"
     assert client.execution_id == "execution_test"
+
+
+def test_default_client_starts_from_thin_capsule_without_resolving_environment():
+    session = FakeSession('{"id":1,"result":"pong"}\n')
+
+    class FakeCapsule:
+        id = "capsule_" + "a" * 64
+        manifest_digest = "sha256:" + "b" * 64
+        manifest = SimpleNamespace(source_environment_id=None)
+
+        def spawn_interactive(self, *, policy):
+            assert policy.timeout_seconds == 3600
+            return session
+
+    class FakeRuntime:
+        def __init__(self):
+            self.environment_calls = 0
+
+        def pull_capsule(self, repository, reference, *, expected_source_revision):
+            assert repository == client_module.DEFAULT_BRIDGE_CAPSULE_REPOSITORY
+            assert reference == client_module.DEFAULT_BRIDGE_CAPSULE_REFERENCE
+            assert expected_source_revision == client_module.DEFAULT_BRIDGE_SOURCE_REVISION
+            return FakeCapsule()
+
+        def ensure_references(self, *args, **kwargs):
+            self.environment_calls += 1
+            raise AssertionError("ordinary proof execution must not hydrate a full environment")
+
+    runtime = FakeRuntime()
+    client = LeanClient(runtime=runtime)
+    assert client.ping() == "pong"
+    assert client.capsule_id == "capsule_" + "a" * 64
+    assert client.environment_id is None
+    assert runtime.environment_calls == 0
 
 
 @pytest.mark.parametrize("missing", ["verified", "computed_lo", "computed_hi"])
