@@ -50,9 +50,9 @@ def _bridge_core_expression(value: dict[str, Any]) -> dict[str, Any]:
 
 
 DEFAULT_BRIDGE_PACKAGE_REF = (
-    "github:alerad/leancert-bridge@941c26b08cfbb89404a3c1d8149a0466637a7ee9"
+    "github:alerad/leancert-bridge@8e6ab4f200a659d59d6fa915e6d282ca2bf9eab5"
 )
-DEFAULT_BRIDGE_SOURCE_REVISION = "941c26b08cfbb89404a3c1d8149a0466637a7ee9"
+DEFAULT_BRIDGE_SOURCE_REVISION = "8e6ab4f200a659d59d6fa915e6d282ca2bf9eab5"
 DEFAULT_BRIDGE_PROGRAM_LIBRARY = "ghcr.io/alerad/leancert-bridge-programs"
 DEFAULT_BRIDGE_PROGRAM_REFERENCE = f"revision-{DEFAULT_BRIDGE_SOURCE_REVISION}"
 DEFAULT_RUNTIME_LIBRARIES = (
