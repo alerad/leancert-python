@@ -1,7 +1,7 @@
 name: Build Python distributions
 
 env:
-  LEAN_RUNTIME_REVISION: f995abe15851fe211a9e6f6d1541d3f60a037145
+  LEAN_RUNTIME_REVISION: 198f37308133a722f965c2543b69dcf1b3fb164f
 
 on:
   push:
