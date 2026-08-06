@@ -117,7 +117,17 @@ def test_default_runtime_prefers_leancert_and_shared_environment_libraries(monke
     client_module._new_default_runtime()
 
     assert calls == [{"libraries": client_module.DEFAULT_RUNTIME_LIBRARIES}]
-    assert client_module.DEFAULT_RUNTIME_LIBRARIES[0] == "ghcr.io/alerad/leancert-runtime"
+    assert client_module.DEFAULT_RUNTIME_LIBRARIES == ("ghcr.io/alerad/leancert-runtime",)
+
+
+def test_default_bridge_environment_uses_published_artifact_recipe():
+    client = LeanClient(runtime=SimpleNamespace())
+
+    assert client.artifact_command == (
+        "lake",
+        "exe",
+        "@LeanCertBridge/lean_bridge_runtime_prepare",
+    )
 
 
 def test_explicit_runtime_library_environment_replaces_sdk_defaults(monkeypatch):

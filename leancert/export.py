@@ -14,6 +14,7 @@ from typing import Any
 from lean_runtime import ExecutionPolicy, LeanRuntimeError, Runtime
 
 from . import ast
+from .client import LeanClient
 from .expression_codec import compile_semantic_expression, lower_bridge_expression
 from .result import (
     ExportDependencyUnavailable,
@@ -432,13 +433,14 @@ def _verify_in_managed_environment(
 ):
     """Kernel-check one generated source in the exact originating environment."""
     try:
-        selected_runtime = runtime or Runtime()
         if provenance.environment_id:
+            selected_runtime = runtime or Runtime()
             environment = selected_runtime.environment(provenance.environment_id)
         elif provenance.runtime_package_ref:
-            environment = selected_runtime.open_references(
-                [provenance.runtime_package_ref], timeout=3600
-            )
+            environment = LeanClient(
+                package_ref=provenance.runtime_package_ref,
+                runtime=runtime,
+            ).environment
         else:
             return ExportUnsupported(
                 "proof provenance lacks a replay environment or exact package reference"

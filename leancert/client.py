@@ -50,17 +50,18 @@ def _bridge_core_expression(value: dict[str, Any]) -> dict[str, Any]:
 
 
 DEFAULT_BRIDGE_PACKAGE_REF = (
-    "github:alerad/leancert-bridge@e04c614ae13b49b69f86ae0c6d655d22ca4896cf"
+    "github:alerad/leancert-bridge@03c5e46c00706cb4978211fea10f6fe650e9feec"
 )
-DEFAULT_BRIDGE_SOURCE_REVISION = "e04c614ae13b49b69f86ae0c6d655d22ca4896cf"
+DEFAULT_BRIDGE_SOURCE_REVISION = "03c5e46c00706cb4978211fea10f6fe650e9feec"
 DEFAULT_BRIDGE_PROGRAM_LIBRARY = "ghcr.io/alerad/leancert-bridge-programs"
 DEFAULT_BRIDGE_PROGRAM_REFERENCE = f"revision-{DEFAULT_BRIDGE_SOURCE_REVISION}"
-DEFAULT_RUNTIME_LIBRARIES = (
-    "ghcr.io/alerad/leancert-runtime",
-    "ghcr.io/alerad/lean-runtime-cache",
-)
+DEFAULT_RUNTIME_LIBRARIES = ("ghcr.io/alerad/leancert-runtime",)
 DEFAULT_BRIDGE_COMMAND = ("lake", "exe", "@LeanCertBridge/lean_bridge")
-DEFAULT_ARTIFACT_COMMAND: tuple[str, ...] = ()
+DEFAULT_ARTIFACT_COMMAND = (
+    "lake",
+    "exe",
+    "@LeanCertBridge/lean_bridge_runtime_prepare",
+)
 
 
 def _new_default_runtime() -> Runtime:

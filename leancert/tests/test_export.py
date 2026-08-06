@@ -321,7 +321,9 @@ def test_export_timeout_is_typed_and_atomic(tmp_path, monkeypatch):
     assert not list(tmp_path.glob(".proof.*"))
 
 
-def test_ready_program_result_hydrates_full_environment_only_for_kernel_replay(tmp_path):
+def test_ready_program_result_hydrates_full_environment_only_for_kernel_replay(
+    tmp_path, monkeypatch
+):
     x = ast.var("x")
     client = ReplayClient((response(),))
     del client.environment
@@ -345,15 +347,19 @@ def test_ready_program_result_hydrates_full_environment_only_for_kernel_replay(t
         ),
     )
 
-    class Runtime:
-        def open_references(self, references, *, timeout):
-            observed["references"] = references
-            observed["timeout"] = timeout
-            return environment
+    runtime = SimpleNamespace(name="caller-runtime")
 
-    exported = result.export_lean_project(str(tmp_path / "program-proof"), runtime=Runtime())
+    class ManagedClient:
+        def __init__(self, *, package_ref, runtime):
+            observed["package_ref"] = package_ref
+            observed["runtime"] = runtime
+            self.environment = environment
+
+    monkeypatch.setattr("leancert.export.LeanClient", ManagedClient)
+
+    exported = result.export_lean_project(str(tmp_path / "program-proof"), runtime=runtime)
     assert isinstance(exported, lc.ExportVerified)
-    assert observed == {"references": [client.package_ref], "timeout": 3600}
+    assert observed == {"package_ref": client.package_ref, "runtime": runtime}
     provenance = json.loads((tmp_path / "program-proof" / "provenance.json").read_text())
     assert provenance["program_id"] == client._program.id
     assert provenance["environment_id"] == environment.id

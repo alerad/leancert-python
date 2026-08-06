@@ -1,7 +1,7 @@
 name: Build Python distributions
 
 env:
-  LEAN_RUNTIME_VERSION: 2.0.0
+  LEAN_RUNTIME_VERSION: 2.0.2
 
 on:
   push:
@@ -176,7 +176,7 @@ jobs:
           name: distributions
           path: dist
       - name: Require the managed runtime release on PyPI
-        run: pip install 'lean-runtime>=2.0.0,<3.0.0'
+        run: pip install 'lean-runtime>=2.0.2,<3.0.0'
       - uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: dist/

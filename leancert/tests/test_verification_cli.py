@@ -92,6 +92,44 @@ def test_verify_checks_valid_artifact_in_managed_environment(tmp_path):
     assert runtime.checked[0][1] == "LeanCertExport.lean"
 
 
+def test_verifier_resolves_program_provenance_with_bridge_environment_recipe(tmp_path, monkeypatch):
+    project = exported_project(tmp_path)
+    package_ref = "github:alerad/leancert-bridge@" + "c" * 40
+    provenance_path = project / "provenance.json"
+    provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
+    provenance["environment_id"] = None
+    provenance["runtime_package_ref"] = package_ref
+    provenance_path.write_text(json.dumps(provenance, sort_keys=True), encoding="utf-8")
+
+    from leancert.verification import file_digest
+
+    manifest_path = project / "artifact.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["files"]["provenance.json"] = file_digest(provenance_path)
+    manifest_path.write_text(json.dumps(manifest, sort_keys=True), encoding="utf-8")
+
+    runtime = SimpleNamespace(name="caller-runtime")
+    environment = FakeRuntime()
+    observed = {}
+
+    class ManagedClient:
+        def __init__(self, *, package_ref, runtime, resolution_timeout_seconds):
+            observed["package_ref"] = package_ref
+            observed["runtime"] = runtime
+            observed["timeout"] = resolution_timeout_seconds
+            self.environment = environment
+
+    monkeypatch.setattr("leancert.verification.LeanClient", ManagedClient)
+    report = lc.verify_exported_projects([project], runtime=runtime, timeout=123)
+
+    assert report.verified
+    assert observed == {
+        "package_ref": package_ref,
+        "runtime": runtime,
+        "timeout": 123,
+    }
+
+
 @pytest.mark.parametrize(
     "kind", ["strict_bound", "system_root", "scalar_root", "integral", "eventual"]
 )

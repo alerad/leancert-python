@@ -15,6 +15,7 @@ from typing import Any, Literal
 from lean_runtime import ExecutionPolicy, LeanRuntimeError, Runtime
 
 from . import ast
+from .client import LeanClient
 from .exceptions import ProtocolViolation
 from .protocol import (
     INTEGRAL_AUTHORITIES,
@@ -532,9 +533,11 @@ def verify_exported_projects(
                 environment = selected_runtime.environment(validated.environment_id)
             else:
                 assert validated.runtime_package_ref is not None
-                environment = selected_runtime.open_references(
-                    [validated.runtime_package_ref], timeout=timeout
-                )
+                environment = LeanClient(
+                    package_ref=validated.runtime_package_ref,
+                    runtime=runtime,
+                    resolution_timeout_seconds=timeout,
+                ).environment
             execution = environment.check_files(
                 {"LeanCertExport.lean": _read_text(project / "LeanCertExport.lean")},
                 entrypoint="LeanCertExport.lean",
