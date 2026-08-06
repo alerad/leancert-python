@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 from leancert.cli import main
 from leancert.doctor import diagnose
@@ -19,6 +20,7 @@ class FakeClient:
         self.environment_id = "env_" + "a" * 64
         self.program_id = None
         self.execution_id = "execution_" + "b" * 64
+        self._program = None
         self._info = json.loads((FIXTURES / "bridge-contract-2.1" / "handshake.json").read_text())
         self._info["bridge_api_version"] = "2.2.0"
         self._info["protocol_version"] = "2.2.0"
@@ -38,6 +40,10 @@ class FakeClient:
         return self._info
 
     @property
+    def bridge_info(self):
+        return dict(self._info)
+
+    @property
     def bridge_contract(self):
         return BridgeHandshake.parse(self._info)
 
@@ -54,7 +60,28 @@ def test_doctor_accepts_release_contract_2_2():
         "replayable_bounds",
         "checked_adaptive",
         "runtime_provenance",
+        "replay_export",
     }
+
+
+def test_doctor_reports_ready_program_without_exportable_toolchain():
+    class MissingProgramToolchain(FakeClient):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            self._info.pop("dependencies")
+            self._info["leancert_version"] = "f" * 40
+            self.program_id = "program_" + "c" * 64
+            self._program = SimpleNamespace(
+                id=self.program_id,
+                copy_id="sha256:" + "d" * 64,
+                description=SimpleNamespace(toolchain=None),
+            )
+
+    report = diagnose(client_factory=MissingProgramToolchain)
+
+    check = next(check for check in report.checks if check.name == "replay_export")
+    assert not check.ok
+    assert "<missing toolchain>" in check.detail
 
 
 def test_doctor_reports_missing_execution_target_without_throwing():
