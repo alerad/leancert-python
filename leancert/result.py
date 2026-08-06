@@ -96,6 +96,10 @@ class BridgeProvenance:
 
     environment_id: str | None = None
     execution_id: str | None = None
+    execution_route: Literal["program", "environment"] | None = None
+    program_id: str | None = None
+    program_copy_id: str | None = None
+    runtime_package_ref: str | None = None
     environment_lock_id: str | None = None
     bridge_api_version: str | None = None
     protocol_version: str | None = None

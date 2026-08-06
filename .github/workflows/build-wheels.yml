@@ -1,5 +1,8 @@
 name: Build Python distributions
 
+env:
+  LEAN_RUNTIME_VERSION: 2.0.2
+
 on:
   push:
     tags:
@@ -22,6 +25,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+      - run: >-
+          pip install
+          "lean-runtime==${LEAN_RUNTIME_VERSION}"
       - run: pip install -e '.[dev]'
       - name: Run Bridge-independent safety and contract tests
         run: >-
@@ -89,6 +95,11 @@ jobs:
         with:
           name: distributions
           path: dist
+      - name: Install ready-program runtime
+        shell: bash
+        run: >-
+          pip install
+          "lean-runtime==${LEAN_RUNTIME_VERSION}"
       - name: Install wheel
         shell: bash
         run: pip install dist/*.whl
@@ -101,16 +112,17 @@ jobs:
           import leancert
           from leancert.client import (
               DEFAULT_BRIDGE_PACKAGE_REF,
-              DEFAULT_RUNTIME_CACHES,
+              DEFAULT_BRIDGE_PROGRAM_LIBRARY,
               LeanClient,
           )
 
           client = LeanClient()
-          assert version("lean-runtime").split(".", 1)[0] == "1"
+          assert version("lean-runtime").split(".", 1)[0] == "2"
           assert client.package_ref == DEFAULT_BRIDGE_PACKAGE_REF
-          assert DEFAULT_RUNTIME_CACHES[0] == "oci://ghcr.io/alerad/leancert-runtime"
+          assert DEFAULT_BRIDGE_PROGRAM_LIBRARY.endswith("leancert-bridge-programs")
           assert client.execution_id is None
           assert client._environment is None
+          assert client._program is None
           print("pure Python managed-runtime wheel smoke test passed")
           PY
 
@@ -126,13 +138,18 @@ jobs:
         with:
           name: distributions
           path: dist
+      - name: Install ready-program runtime
+        shell: bash
+        run: >-
+          pip install
+          "lean-runtime==${LEAN_RUNTIME_VERSION}"
       - name: Install the built SDK
         shell: bash
         run: pip install dist/*.whl
-      - name: Prove through the published OCI environment
+      - name: Prove through the published ready-to-run program
         shell: bash
         env:
-          LEAN_RUNTIME_PREBUILT: require
+          LEAN_RUNTIME_AVAILABILITY: required
         run: |
           python - <<'PY'
           import leancert as lc
@@ -140,9 +157,11 @@ jobs:
           x = lc.ast.var("x")
           result = lc.prove(x * x <= 1, where={x: (-1, 1)})
           assert isinstance(result, lc.Verified), result
-          assert result.provenance.environment_id.startswith("env_")
+          assert result.provenance.execution_route == "program"
+          assert result.provenance.environment_id is None
+          assert result.provenance.program_id.startswith("program_")
           assert result.provenance.execution_id.startswith("execution_")
-          print(result.provenance.environment_id)
+          print(result.provenance.program_id)
           PY
 
   publish:
@@ -157,7 +176,7 @@ jobs:
           name: distributions
           path: dist
       - name: Require the managed runtime release on PyPI
-        run: pip install 'lean-runtime>=1.0.0,<2.0.0'
+        run: pip install 'lean-runtime>=2.0.2,<3.0.0'
       - uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: dist/

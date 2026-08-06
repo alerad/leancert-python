@@ -267,7 +267,7 @@ def test_export_verification_checks_source_in_originating_environment(tmp_path):
         observed["environment_id"] = environment_id
         return Environment()
 
-    runtime = SimpleNamespace(open=open_environment)
+    runtime = SimpleNamespace(environment=open_environment)
     exported = result.export_lean_project(str(tmp_path / "proof"), runtime=runtime)
     assert isinstance(exported, lc.ExportVerified)
     assert observed["environment_id"] == ENVIRONMENT_ID
@@ -289,7 +289,7 @@ def test_failed_export_is_atomic(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(
         "leancert.export.Runtime",
-        lambda: SimpleNamespace(open=lambda environment_id: environment),
+        lambda: SimpleNamespace(environment=lambda environment_id: environment),
     )
 
     exported = result.export_lean_project(str(tmp_path / "proof"))
@@ -311,7 +311,7 @@ def test_export_timeout_is_typed_and_atomic(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(
         "leancert.export.Runtime",
-        lambda: SimpleNamespace(open=lambda environment_id: environment),
+        lambda: SimpleNamespace(environment=lambda environment_id: environment),
     )
     exported = result.export_lean_project(str(tmp_path / "proof"))
     assert isinstance(exported, lc.ExportResourceLimit)
@@ -319,3 +319,47 @@ def test_export_timeout_is_typed_and_atomic(tmp_path, monkeypatch):
     assert exported.build_output == "still building"
     assert not (tmp_path / "proof").exists()
     assert not list(tmp_path.glob(".proof.*"))
+
+
+def test_ready_program_result_hydrates_full_environment_only_for_kernel_replay(
+    tmp_path, monkeypatch
+):
+    x = ast.var("x")
+    client = ReplayClient((response(),))
+    del client.environment
+    client.package_ref = "github:alerad/leancert-bridge@" + "c" * 40
+    client._environment = None
+    client._program = SimpleNamespace(
+        id="program_" + "d" * 64,
+        copy_id="sha256:" + "e" * 64,
+        description=SimpleNamespace(toolchain="leanprover/lean4:v4.32.2"),
+    )
+    result = lc.prove(x <= 1, where={x: (0, 1)}, client=client)
+    assert result.provenance.environment_id is None
+    assert result.provenance.execution_route == "program"
+
+    observed = {}
+    environment = SimpleNamespace(
+        id="env_" + "f" * 64,
+        lock=SimpleNamespace(lock_id="lock_" + "1" * 64),
+        check_files=lambda *args, **kwargs: SimpleNamespace(
+            ok=True, timed_out=False, stdout="kernel checked", stderr=""
+        ),
+    )
+
+    runtime = SimpleNamespace(name="caller-runtime")
+
+    class ManagedClient:
+        def __init__(self, *, package_ref, runtime):
+            observed["package_ref"] = package_ref
+            observed["runtime"] = runtime
+            self.environment = environment
+
+    monkeypatch.setattr("leancert.export.LeanClient", ManagedClient)
+
+    exported = result.export_lean_project(str(tmp_path / "program-proof"), runtime=runtime)
+    assert isinstance(exported, lc.ExportVerified)
+    assert observed == {"package_ref": client.package_ref, "runtime": runtime}
+    provenance = json.loads((tmp_path / "program-proof" / "provenance.json").read_text())
+    assert provenance["program_id"] == client._program.id
+    assert provenance["environment_id"] == environment.id

@@ -13,7 +13,7 @@ from leancert import ast
 from lean_runtime import Runtime
 
 runtime = Runtime()
-environment = runtime.open("env_<profiled-downstream-environment-id>")
+environment = runtime.environment("env_<profiled-downstream-environment-id>")
 
 with lc.Solver(
     runtime=runtime,

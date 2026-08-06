@@ -42,6 +42,9 @@ def raw_client(responses: str) -> LeanClient:
     }
     client._bridge_contract = BridgeHandshake.parse(client._bridge_info)
     client._io_lock = threading.RLock()
+    client._environment = None
+    client._program = None
+    client.package_ref = "github:a/b@" + "a" * 40
     return client
 
 
@@ -89,41 +92,52 @@ def test_environment_resolution_is_lazy():
         def __init__(self):
             self.calls = []
 
-        def ensure_references(self, references, *, timeout):
+        def open_references(self, references, *, timeout):
             self.calls.append((references, timeout))
             return SimpleNamespace(id="environment_test")
 
     runtime = FakeRuntime()
     client = LeanClient(package_ref="github:a/b@v1", runtime=runtime, artifact_command=())
     assert runtime.calls == []
-    assert client.environment_id == "environment_test"
+    assert client.environment_id is None
+    assert client.environment.id == "environment_test"
     assert runtime.calls == [(["github:a/b@v1"], 3600.0)]
 
 
-def test_default_runtime_prefers_leancert_and_shared_oci_caches(monkeypatch):
+def test_default_runtime_prefers_leancert_and_shared_environment_libraries(monkeypatch):
     calls = []
 
     def runtime_factory(**kwargs):
         calls.append(kwargs)
         return SimpleNamespace()
 
-    monkeypatch.delenv("LEAN_RUNTIME_CACHES", raising=False)
+    monkeypatch.delenv("LEAN_RUNTIME_LIBRARIES", raising=False)
     monkeypatch.setattr(client_module, "Runtime", runtime_factory)
 
     client_module._new_default_runtime()
 
-    assert calls == [{"caches": client_module.DEFAULT_RUNTIME_CACHES}]
-    assert client_module.DEFAULT_RUNTIME_CACHES[0] == ("oci://ghcr.io/alerad/leancert-runtime")
+    assert calls == [{"libraries": client_module.DEFAULT_RUNTIME_LIBRARIES}]
+    assert client_module.DEFAULT_RUNTIME_LIBRARIES == ("ghcr.io/alerad/leancert-runtime",)
 
 
-def test_explicit_runtime_cache_environment_replaces_sdk_defaults(monkeypatch):
+def test_default_bridge_environment_uses_published_artifact_recipe():
+    client = LeanClient(runtime=SimpleNamespace())
+
+    assert client.artifact_command == (
+        "lake",
+        "exe",
+        "@LeanCertBridge/lean_bridge_runtime_prepare",
+    )
+
+
+def test_explicit_runtime_library_environment_replaces_sdk_defaults(monkeypatch):
     calls = []
 
     def runtime_factory(**kwargs):
         calls.append(kwargs)
         return SimpleNamespace()
 
-    monkeypatch.setenv("LEAN_RUNTIME_CACHES", "")
+    monkeypatch.setenv("LEAN_RUNTIME_LIBRARIES", "")
     monkeypatch.setattr(client_module, "Runtime", runtime_factory)
 
     client_module._new_default_runtime()
@@ -136,7 +150,7 @@ def test_default_clients_share_one_resolved_environment(monkeypatch):
         def __init__(self):
             self.calls = []
 
-        def ensure_references(self, references, *, timeout):
+        def open_references(self, references, *, timeout):
             self.calls.append((references, timeout))
             return SimpleNamespace(id="environment_shared")
 
@@ -155,7 +169,7 @@ def test_environment_resolution_timeout_is_configurable():
         def __init__(self):
             self.timeout = None
 
-        def ensure_references(self, references, *, timeout):
+        def open_references(self, references, *, timeout):
             assert references == ["github:a/b@v1"]
             self.timeout = timeout
             return SimpleNamespace(id="environment_test")
@@ -167,7 +181,7 @@ def test_environment_resolution_timeout_is_configurable():
         resolution_timeout_seconds=7200,
         artifact_command=(),
     )
-    assert client.environment_id == "environment_test"
+    assert client.environment.id == "environment_test"
     assert runtime.timeout == 7200.0
 
 
@@ -192,25 +206,29 @@ def test_artifact_hydration_is_part_of_the_managed_environment_lock():
         def __init__(self):
             self.resolved = None
 
-        def open(self, identifier):
+        def environment(self, identifier):
             raise RuntimeEnvironmentError(f"unknown environment: {identifier}")
 
         def spec_from_references(self, references):
             assert references == ["github:a/b@v1"]
             return Spec((Package(),))
 
-        def resolve(self, spec, *, timeout):
+        def prepare(self, spec, *, timeout):
             self.resolved = (spec, timeout)
             return "locked"
 
-        def ensure(self, lock, *, name):
+        def open_exact(self, lock, *, name):
             assert lock == "locked"
             assert name.startswith("leancert-")
             return SimpleNamespace(id="environment_hydrated")
 
     runtime = FakeRuntime()
-    client = LeanClient(package_ref="github:a/b@v1", runtime=runtime)
-    assert client.environment_id == "environment_hydrated"
+    client = LeanClient(
+        package_ref="github:a/b@v1",
+        runtime=runtime,
+        artifact_command=("lake", "exe", "@LeanCertBridge/lean_bridge_runtime_prepare"),
+    )
+    assert client.environment.id == "environment_hydrated"
     spec, timeout = runtime.resolved
     assert spec.packages[0].artifact_command == (
         "lake",
@@ -224,14 +242,16 @@ def test_named_managed_environment_reopens_without_resolution():
     environment = SimpleNamespace(id="environment_cached")
 
     class FakeRuntime:
-        def open(self, identifier):
+        def environment(self, identifier):
             assert identifier.startswith("leancert-")
             return environment
 
         def spec_from_references(self, references):
             raise AssertionError("a named cache hit must not resolve references")
 
-    client = LeanClient(package_ref="github:a/b@v1", runtime=FakeRuntime())
+    client = LeanClient(
+        package_ref="github:a/b@v1", runtime=FakeRuntime(), artifact_command=("hydrate",)
+    )
     assert client.environment is environment
 
 
@@ -249,6 +269,40 @@ def test_injected_environment_starts_managed_session():
     client = LeanClient(environment=FakeEnvironment())
     assert client.ping() == "pong"
     assert client.execution_id == "execution_test"
+
+
+def test_default_client_starts_from_ready_program_without_resolving_environment():
+    session = FakeSession('{"id":1,"result":"pong"}\n')
+
+    class FakeProgram:
+        id = "program_" + "a" * 64
+        copy_id = "sha256:" + "b" * 64
+        description = SimpleNamespace(source_environment_id=None)
+
+        def spawn_interactive(self, *, policy):
+            assert policy.timeout_seconds == 3600
+            return session
+
+    class FakeRuntime:
+        def __init__(self):
+            self.environment_calls = 0
+
+        def download_program(self, library, reference, *, expected_source_revision):
+            assert library == client_module.DEFAULT_BRIDGE_PROGRAM_LIBRARY
+            assert reference == client_module.DEFAULT_BRIDGE_PROGRAM_REFERENCE
+            assert expected_source_revision == client_module.DEFAULT_BRIDGE_SOURCE_REVISION
+            return FakeProgram()
+
+        def open_references(self, *args, **kwargs):
+            self.environment_calls += 1
+            raise AssertionError("ordinary proof execution must not hydrate a full environment")
+
+    runtime = FakeRuntime()
+    client = LeanClient(runtime=runtime)
+    assert client.ping() == "pong"
+    assert client.program_id == "program_" + "a" * 64
+    assert client.environment_id is None
+    assert runtime.environment_calls == 0
 
 
 @pytest.mark.parametrize("missing", ["verified", "computed_lo", "computed_hi"])

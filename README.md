@@ -19,18 +19,22 @@ pip install leancert
 ```
 
 The wheel is pure Python. On the first checked operation, `lean-runtime`
-resolves the SDK's exact `leancert-bridge` Git revision and first checks the
-platform-aware `oci://ghcr.io/alerad/leancert-runtime` cache. A cache hit
-downloads and verifies the already-built LeanCert, Mathlib, and Bridge package
-layers; a miss falls back to the exact source build. The runtime installs the
-declared Lean toolchain if necessary and starts a managed interactive session.
-Later runs reuse the content-addressed environment; no Bridge binary path or
-system-wide Lean installation is needed.
+downloads the compatible Bridge ready-to-run program from the
+`ghcr.io/alerad/leancert-bridge-programs` program library. The program contains
+the precompiled Bridge and its runtime libraries, not a Mathlib source/build
+tree. Later calls reuse it; no Bridge path or system-wide Lean installation is
+needed.
 
-Set `LEAN_RUNTIME_PREBUILT=require` when CI must use a published environment,
-or `LEAN_RUNTIME_PREBUILT=never` to audit the source-build path. An explicit
-`LEAN_RUNTIME_CACHES` value replaces the SDK defaults, including an empty value
-to disable remote cache lookup.
+Full LeanCert and Mathlib environments are hydrated lazily only for independent
+kernel replay, source rebuild audits, or custom registered-enclosure profiles.
+Those environments remain distinct from ready programs in result provenance: a
+program establishes `compiled_checker`, while successful exported proof replay
+establishes `kernel_replay`.
+
+Set `LEAN_RUNTIME_AVAILABILITY=required` when CI must use a downloadable
+environment, or `LEAN_RUNTIME_AVAILABILITY=local` to audit the source-build
+path. An explicit `LEAN_RUNTIME_LIBRARIES` value replaces the SDK defaults,
+including an empty value to disable environment-library lookup.
 
 The v1 overhaul also includes a bridge-independent, exact semantic model under
 `leancert.ast`. Its versioned encoding, binder rules, claim closure, and legacy

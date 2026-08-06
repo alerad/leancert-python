@@ -39,24 +39,32 @@ def diagnose(
     *,
     client_factory: Callable[..., LeanClient] = LeanClient,
 ) -> DoctorReport:
-    """Ensure the managed environment and negotiate the production contract."""
+    """Open the execution target and negotiate the production contract."""
     checks: list[DoctorCheck] = []
     try:
         client = client_factory(package_ref=package_ref or DEFAULT_BRIDGE_PACKAGE_REF)
     except Exception as exc:
-        return DoctorReport((DoctorCheck("environment", False, str(exc)),), {})
+        return DoctorReport((DoctorCheck("execution_target", False, str(exc)),), {})
 
     try:
         try:
             info = client.get_info()
             contract = client.bridge_contract
             environment_id = client.environment_id
+            program_id = getattr(client, "program_id", None)
             execution_id = client.execution_id
         except Exception as exc:
             checks.append(DoctorCheck("handshake", False, str(exc)))
             return DoctorReport(tuple(checks), {})
 
-        checks.append(DoctorCheck("environment", True, environment_id))
+        execution_target = program_id or environment_id
+        checks.append(
+            DoctorCheck(
+                "execution_target",
+                isinstance(execution_target, str) and bool(execution_target),
+                execution_target or "<unavailable>",
+            )
+        )
 
         checks.append(
             DoctorCheck(

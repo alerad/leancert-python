@@ -26,6 +26,7 @@ from lean_runtime import (
     ExecutionPolicy,
     ExecutionResult,
     InteractiveSession,
+    ReadyProgram,
     Runtime,
 )
 from lean_runtime import EnvironmentError as RuntimeEnvironmentError
@@ -49,12 +50,12 @@ def _bridge_core_expression(value: dict[str, Any]) -> dict[str, Any]:
 
 
 DEFAULT_BRIDGE_PACKAGE_REF = (
-    "github:alerad/leancert-bridge@8dcdec8c4a37f2e9a533d486582beed381e904f1"
+    "github:alerad/leancert-bridge@03c5e46c00706cb4978211fea10f6fe650e9feec"
 )
-DEFAULT_RUNTIME_CACHES = (
-    "oci://ghcr.io/alerad/leancert-runtime",
-    "oci://ghcr.io/alerad/lean-runtime-cache",
-)
+DEFAULT_BRIDGE_SOURCE_REVISION = "03c5e46c00706cb4978211fea10f6fe650e9feec"
+DEFAULT_BRIDGE_PROGRAM_LIBRARY = "ghcr.io/alerad/leancert-bridge-programs"
+DEFAULT_BRIDGE_PROGRAM_REFERENCE = f"revision-{DEFAULT_BRIDGE_SOURCE_REVISION}"
+DEFAULT_RUNTIME_LIBRARIES = ("ghcr.io/alerad/leancert-runtime",)
 DEFAULT_BRIDGE_COMMAND = ("lake", "exe", "@LeanCertBridge/lean_bridge")
 DEFAULT_ARTIFACT_COMMAND = (
     "lake",
@@ -64,10 +65,10 @@ DEFAULT_ARTIFACT_COMMAND = (
 
 
 def _new_default_runtime() -> Runtime:
-    """Prefer LeanCert's verified OCI cache while honoring explicit user policy."""
-    if "LEAN_RUNTIME_CACHES" in os.environ:
+    """Prefer LeanCert's downloadable environments while honoring user policy."""
+    if "LEAN_RUNTIME_LIBRARIES" in os.environ:
         return Runtime()
-    return Runtime(caches=DEFAULT_RUNTIME_CACHES)
+    return Runtime(libraries=DEFAULT_RUNTIME_LIBRARIES)
 
 
 _DEFAULT_RUNTIME = _new_default_runtime()
@@ -97,11 +98,14 @@ class LeanClient:
         *,
         runtime: Runtime | None = None,
         environment: Environment | None = None,
+        program: ReadyProgram | None = None,
         execution_policy: ExecutionPolicy | None = None,
         resolution_timeout_seconds: float = 3600,
         artifact_command: Sequence[str] = DEFAULT_ARTIFACT_COMMAND,
         command: Sequence[str] = DEFAULT_BRIDGE_COMMAND,
         enclosure_profile: str | Path | EnclosureProfile | None = None,
+        program_library: str = DEFAULT_BRIDGE_PROGRAM_LIBRARY,
+        program_reference: str = DEFAULT_BRIDGE_PROGRAM_REFERENCE,
     ):
         """
         Initialize the client.
@@ -135,8 +139,13 @@ class LeanClient:
             raise ValueError("resolution_timeout_seconds must be a finite positive number")
         self.package_ref = package_ref
         self.runtime = runtime or _DEFAULT_RUNTIME
-        self._uses_default_runtime = runtime is None and environment is None
+        if environment is not None and program is not None:
+            raise ValueError("environment and program are mutually exclusive")
+        self._uses_default_runtime = runtime is None and environment is None and program is None
         self._environment = environment
+        self._program = program
+        self.program_library = program_library
+        self.program_reference = program_reference
         self.execution_policy = execution_policy or ExecutionPolicy(
             timeout_seconds=3600,
             max_output_bytes=10_000_000,
@@ -161,6 +170,24 @@ class LeanClient:
         self._enclosures: EnclosureEnvironment | None = None
 
     @property
+    def uses_ready_program(self) -> bool:
+        """Whether ordinary Bridge execution uses the small precompiled program."""
+        return self.enclosure_profile is None and self._environment is None
+
+    @property
+    def program(self) -> ReadyProgram:
+        """Return the ready-to-run Bridge program, downloading it on first use."""
+        if self.enclosure_profile is not None:
+            raise BridgeError("registered enclosure profiles require a full managed environment")
+        if self._program is None:
+            self._program = self.runtime.download_program(
+                self.program_library,
+                self.program_reference,
+                expected_source_revision=DEFAULT_BRIDGE_SOURCE_REVISION,
+            )
+        return self._program
+
+    @property
     def environment(self) -> Environment:
         """Return the exact managed environment, resolving it on first use."""
         if self._environment is None:
@@ -178,7 +205,7 @@ class LeanClient:
     def _resolve_environment(self) -> Environment:
         """Resolve and materialize the exact Bridge environment once."""
         if not self.artifact_command:
-            return self.runtime.ensure_references(
+            return self.runtime.open_references(
                 [self.package_ref], timeout=self.resolution_timeout_seconds
             )
         alias_material = json.dumps(
@@ -191,7 +218,7 @@ class LeanClient:
         ).encode("utf-8")
         alias = "leancert-" + hashlib.sha256(alias_material).hexdigest()[:32]
         try:
-            return self.runtime.open(alias)
+            return self.runtime.environment(alias)
         except RuntimeEnvironmentError as exc:
             if not (
                 str(exc).startswith("unknown environment:")
@@ -203,12 +230,24 @@ class LeanClient:
             raise BridgeError("one Bridge package reference must resolve to one direct package")
         package = replace(spec.packages[0], artifact_command=self.artifact_command)
         hydrated_spec = replace(spec, packages=(package,))
-        lock = self.runtime.resolve(hydrated_spec, timeout=self.resolution_timeout_seconds)
-        return self.runtime.ensure(lock, name=alias)
+        lock = self.runtime.prepare(hydrated_spec, timeout=self.resolution_timeout_seconds)
+        return self.runtime.open_exact(lock, name=alias)
 
     @property
-    def environment_id(self) -> str:
-        return self.environment.id
+    def environment_id(self) -> str | None:
+        if self._environment is not None:
+            return self._environment.id
+        if self._program is not None:
+            return self._program.description.source_environment_id
+        return None
+
+    @property
+    def program_id(self) -> str | None:
+        return None if self._program is None else self._program.id
+
+    @property
+    def program_copy_id(self) -> str | None:
+        return None if self._program is None else self._program.copy_id
 
     @property
     def execution_id(self) -> str | None:
@@ -226,10 +265,13 @@ class LeanClient:
             command = list(self.command)
             if self.enclosure_profile is not None:
                 command.extend(["--enclosure-profile", str(self.enclosure_profile.path)])
-            self._session = self.environment.spawn_interactive(
-                command,
-                policy=self.execution_policy,
-            )
+            if self.enclosure_profile is None and self._environment is None:
+                self._session = self.program.spawn_interactive(policy=self.execution_policy)
+            else:
+                self._session = self.environment.spawn_interactive(
+                    command,
+                    policy=self.execution_policy,
+                )
         return self._session
 
     def _check_bridge_contract(self) -> None:

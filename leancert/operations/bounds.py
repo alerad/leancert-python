@@ -13,7 +13,7 @@ from itertools import product
 from typing import Any
 
 from .. import ast
-from ..client import _parse_rat
+from ..client import DEFAULT_BRIDGE_SOURCE_REVISION, _parse_rat
 from ..domain import Interval as ResultInterval
 from ..exceptions import ProtocolViolation
 from ..expression_codec import (
@@ -199,7 +199,12 @@ def bridge_provenance(client: Any) -> BridgeProvenance:
     info = client.bridge_info
     contract = client.bridge_contract
     dependencies = contract.dependencies
-    environment = getattr(client, "environment", None)
+    environment = getattr(client, "_environment", None)
+    if environment is None:
+        # Structural test/dry-run clients may expose a plain environment field;
+        # avoid touching LeanClient.environment because that property hydrates.
+        environment = vars(client).get("environment")
+    program = getattr(client, "_program", None)
     lock = getattr(environment, "lock", None)
     packages = () if lock is None else lock.packages
 
@@ -211,6 +216,10 @@ def bridge_provenance(client: Any) -> BridgeProvenance:
     return BridgeProvenance(
         environment_id=getattr(environment, "id", None),
         execution_id=getattr(client, "execution_id", None),
+        execution_route="program" if program is not None else "environment",
+        program_id=getattr(program, "id", None),
+        program_copy_id=getattr(program, "copy_id", None),
+        runtime_package_ref=getattr(client, "package_ref", None),
         environment_lock_id=None if lock is None else lock.lock_id,
         bridge_api_version=info.get("bridge_api_version"),
         protocol_version=info.get("protocol_version"),
@@ -218,7 +227,8 @@ def bridge_provenance(client: Any) -> BridgeProvenance:
         lean_version=info.get("lean_version"),
         leancert_version=info.get("leancert_version"),
         capability_digest=contract.capability_digest,
-        lean_toolchain=(
+        lean_toolchain=getattr(getattr(program, "description", None), "toolchain", None)
+        or (
             dependencies.lean_toolchain
             if lock is None and dependencies is not None
             else lock.toolchain
@@ -231,24 +241,28 @@ def bridge_provenance(client: Any) -> BridgeProvenance:
             else leancert.url
         )
         if leancert is not None or dependencies is not None
-        else None,
+        else "https://github.com/alerad/leancert.git",
         leancert_input_revision=(
             dependencies.leancert_input_revision
             if leancert is None and dependencies is not None
             else leancert.requested_revision
         )
         if leancert is not None or dependencies is not None
-        else None,
+        else info.get("leancert_version"),
         leancert_resolved_revision=(
             dependencies.leancert_resolved_revision
             if leancert is None and dependencies is not None
             else leancert.revision
         )
         if leancert is not None or dependencies is not None
-        else None,
+        else info.get("leancert_version"),
         leancert_tree_hash=None if leancert is None else leancert.tree_hash,
-        bridge_source=None if bridge is None else bridge.url,
-        bridge_resolved_revision=None if bridge is None else bridge.revision,
+        bridge_source=(
+            "https://github.com/alerad/leancert-bridge.git" if bridge is None else bridge.url
+        ),
+        bridge_resolved_revision=(
+            DEFAULT_BRIDGE_SOURCE_REVISION if bridge is None else bridge.revision
+        ),
         bridge_tree_hash=None if bridge is None else bridge.tree_hash,
     )
 
