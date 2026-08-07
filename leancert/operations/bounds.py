@@ -207,6 +207,14 @@ def bridge_provenance(client: Any) -> BridgeProvenance:
     program = getattr(client, "_program", None)
     lock = getattr(environment, "lock", None)
     packages = () if lock is None else lock.packages
+    program_toolchain = getattr(getattr(program, "description", None), "toolchain", None)
+    resolved_toolchain = (
+        dependencies.lean_toolchain
+        if lock is None and dependencies is not None
+        else lock.toolchain
+        if lock is not None
+        else None
+    )
 
     def package_named(name: str):
         return next((package for package in packages if package.name.lower() == name), None)
@@ -227,14 +235,7 @@ def bridge_provenance(client: Any) -> BridgeProvenance:
         lean_version=info.get("lean_version"),
         leancert_version=info.get("leancert_version"),
         capability_digest=contract.capability_digest,
-        lean_toolchain=getattr(getattr(program, "description", None), "toolchain", None)
-        or (
-            dependencies.lean_toolchain
-            if lock is None and dependencies is not None
-            else lock.toolchain
-        )
-        if lock is not None or dependencies is not None
-        else None,
+        lean_toolchain=program_toolchain or resolved_toolchain,
         leancert_source=(
             dependencies.leancert_source
             if leancert is None and dependencies is not None

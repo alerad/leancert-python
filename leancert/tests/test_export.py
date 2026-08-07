@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from copy import deepcopy
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -334,9 +335,12 @@ def test_ready_program_result_hydrates_full_environment_only_for_kernel_replay(
         copy_id="sha256:" + "e" * 64,
         description=SimpleNamespace(toolchain="leanprover/lean4:v4.32.2"),
     )
+    client.bridge_contract = replace(client.bridge_contract, dependencies=None)
+    client.bridge_info["leancert_version"] = "a" * 40
     result = lc.prove(x <= 1, where={x: (0, 1)}, client=client)
     assert result.provenance.environment_id is None
     assert result.provenance.execution_route == "program"
+    assert result.provenance.lean_toolchain == "leanprover/lean4:v4.32.2"
 
     observed = {}
     environment = SimpleNamespace(
