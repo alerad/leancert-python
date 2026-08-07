@@ -2,6 +2,18 @@
 
 Notable user-facing changes to LeanCert Python are recorded here.
 
+## 2.0.2 — 2026-08-07
+
+- Preserved the Lean toolchain identity carried by ready-to-run Bridge programs
+  when Contract 3.0 correctly omits Bridge-authored dependency provenance, so
+  successful results can be exported for independent kernel replay.
+- Required `lean-runtime>=2.0.3,<3.0.0`, whose verified environment importer
+  accepts safe internal package symlinks while continuing to reject links that
+  escape their extracted layer.
+
+No `2.0.1` Python distribution was published. The corresponding repository tag
+contains documentation only and retains `2.0.0` package metadata.
+
 ## 2.0.0 — 2026-08-06
 
 - Moved Lean execution and distribution onto Lean Runtime 2, using
