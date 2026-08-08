@@ -287,6 +287,32 @@ class LeanClient:
         self._bridge_contract = contract
         self._contract_checked = True
 
+    def _retire_session(self, session: InteractiveSession) -> ExecutionResult:
+        """Finalize one unusable session and clear all process-local contract state."""
+        result = session.close()
+        self.execution_result = result
+        if self._session is session:
+            self._session = None
+        self._bridge_info = None
+        self._bridge_contract = None
+        self._enclosures = None
+        self._contract_checked = False
+        return result
+
+    @staticmethod
+    def _execution_failure_detail(result: ExecutionResult, fallback: str) -> str:
+        diagnostic = next(
+            (
+                item.message
+                for item in result.diagnostics
+                if item.severity == "error" and item.message
+            ),
+            None,
+        )
+        detail = diagnostic or result.stderr.strip() or result.stdout.strip() or fallback
+        limit = 2_000
+        return detail if len(detail) <= limit else detail[:limit] + "…"
+
     def _call_raw(self, method: str, params: dict[str, Any]) -> Any:
         """
         Send a raw line-delimited JSON request without compatibility pre-checks.
@@ -317,24 +343,24 @@ class LeanClient:
             )
         except (TypeError, ValueError) as exc:
             raise ProtocolViolation(f"Request is not valid JSON data: {exc}") from exc
-        session.stdin.write(request_json + "\n")
-        session.stdin.flush()
-
-        # Read response
-        response_line = session.stdout.readline()
-        if not response_line:
-            result = session.close()
-            self.execution_result = result
-            self._session = None
-            detail = result.stderr or result.stdout
+        try:
+            response_line = session.request_line(request_json)
+        except RuntimeEnvironmentError as exc:
+            result = self._retire_session(session)
+            detail = self._execution_failure_detail(result, str(exc))
             raise BridgeError(
-                f"Bridge session ended unexpectedly with exit code {result.exit_code}: {detail}"
-            )
+                "Bridge session ended unexpectedly "
+                f"(execution_id={session.execution_id}, exit_code={result.exit_code}): {detail}"
+            ) from exc
 
         try:
             response = json.loads(response_line)
         except json.JSONDecodeError as exc:
-            raise BridgeError(f"Bridge returned malformed JSON: {exc}") from exc
+            self._retire_session(session)
+            excerpt = response_line if len(response_line) <= 500 else response_line[:500] + "…"
+            raise BridgeError(
+                f"Bridge returned malformed JSON: {exc}; response={excerpt!r}"
+            ) from exc
 
         if not isinstance(response, dict):
             raise BridgeError("Bridge response must be a JSON object")
