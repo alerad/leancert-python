@@ -2,6 +2,15 @@
 
 Notable user-facing changes to LeanCert Python are recorded here.
 
+## 2.0.3 — 2026-08-08
+
+- Adopted Lean Runtime 2.0.6's line-oriented interactive transport while
+  retaining LeanCert's strict finite-JSON encoding and Bridge envelope checks.
+- Preserved failed interactive execution provenance and compiler diagnostics in
+  Bridge transport errors, and retired malformed sessions before reuse.
+- Pinned distribution CI to Runtime 2.0.6 and added release tag/package-version
+  verification before building publication artifacts.
+
 ## 2.0.2 — 2026-08-07
 
 - Preserved the Lean toolchain identity carried by ready-to-run Bridge programs

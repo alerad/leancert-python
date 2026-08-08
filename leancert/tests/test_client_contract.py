@@ -20,9 +20,22 @@ class FakeSession:
         self.stderr = io.StringIO()
         self.execution_id = "execution_test"
         self.running = True
+        self.requests = []
 
     def poll(self):
         return None
+
+    def request_line(self, line):
+        if not self.running:
+            raise RuntimeEnvironmentError("interactive process is not running")
+        self.requests.append(line)
+        self.stdin.write(line + "\n")
+        response = self.stdout.readline()
+        if not response:
+            raise RuntimeEnvironmentError(
+                "interactive process ended before producing a stdout response"
+            )
+        return response.removesuffix("\n").removesuffix("\r")
 
     def close(self):
         self.running = False
@@ -56,8 +69,42 @@ def test_response_id_must_match_request():
 
 def test_malformed_json_is_protocol_failure():
     client = raw_client("not-json\n")
-    with pytest.raises(BridgeError, match="malformed JSON"):
+    with pytest.raises(BridgeError, match="response='not-json'"):
         client.ping()
+    assert client._session is None
+
+
+def test_multiple_calls_reuse_one_runtime_session():
+    client = raw_client('{"id":1,"result":"pong"}\n{"id":2,"result":"pong"}\n')
+    session = client._session
+
+    assert client.ping() == "pong"
+    assert client.ping() == "pong"
+    assert client.execution_id == "execution_test"
+    assert client._session is session
+    assert len(session.requests) == 2
+
+
+def test_runtime_transport_failure_retains_execution_diagnostic_and_retires_session():
+    client = raw_client("")
+    session = client._session
+
+    def fail(_line):
+        raise RuntimeEnvironmentError("interactive process ended")
+
+    result = SimpleNamespace(
+        exit_code=1,
+        stdout="",
+        stderr="",
+        diagnostics=(SimpleNamespace(severity="error", message="checker initialization failed"),),
+    )
+    session.request_line = fail
+    session.close = lambda: result
+
+    with pytest.raises(BridgeError, match="execution_id=execution_test.*checker initialization"):
+        client.ping()
+    assert client.execution_result is result
+    assert client._session is None
 
 
 def test_response_envelope_has_exactly_one_payload():
