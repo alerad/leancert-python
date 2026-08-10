@@ -2,6 +2,16 @@
 
 Notable user-facing changes to LeanCert Python are recorded here.
 
+## Unreleased
+
+- Reuse one managed Bridge session across module-level `prove` calls; expose
+  `close_default_prove_client()` for applications that need explicit cleanup.
+- Make replay export prepare-only by default. Independent kernel rebuilding is
+  now explicit through `verify=True` or `leancert verify`.
+- Separate managed-Bridge integration tests from the fast default suite, add a
+  high-signal static gate, and correct public capability and NN-bound claims.
+- Point package metadata and the README at the published documentation site.
+
 ## 2.0.3 — 2026-08-08
 
 - Adopted Lean Runtime 2.0.6's line-oriented interactive transport while

@@ -57,7 +57,7 @@ pytorch = [
 
 [project.urls]
 Homepage = "https://github.com/alerad/leancert-python"
-Documentation = "https://leancert.readthedocs.io"
+Documentation = "https://docs.leancert.io/python/"
 Repository = "https://github.com/alerad/leancert-python"
 Issues = "https://github.com/alerad/leancert-python/issues"
 
@@ -78,7 +78,10 @@ ignore = ["E501"]  # line too long - handled by formatter
 [tool.pytest.ini_options]
 testpaths = ["leancert/tests"]
 python_files = "test_*.py"
-addopts = "-v --tb=short"
+addopts = "-v --tb=short -m 'not integration'"
+markers = [
+    "integration: launches the managed Lean bridge and may hydrate large dependencies",
+]
 
 # MyPy configuration
 [tool.mypy]

@@ -10,21 +10,24 @@ Tests the QuantifierSynthesizer class and various quantifier patterns:
 - FORALL_SIGN: ∀ x, f(x) > 0
 """
 
-import pytest
 from fractions import Fraction
 
-from leancert import var, sin, cos, exp, Solver
+import pytest
+
+from leancert import Solver, cos, exp, sin, var
 from leancert.quantifier import (
     QuantifierPattern,
     QuantifierResult,
     QuantifierSynthesizer,
     Witness,
-    synthesize_bound,
-    synthesize_minimum,
-    synthesize_maximum,
     prove_limit,
     prove_sign,
+    synthesize_bound,
+    synthesize_maximum,
+    synthesize_minimum,
 )
+
+pytestmark = pytest.mark.integration
 
 
 # =============================================================================

@@ -126,6 +126,7 @@ from .proving import (
     RefutationConfig,
     RegisteredEnclosureConfig,
     SystemRootConfig,
+    close_default_prove_client,
     prove,
 )
 
@@ -385,6 +386,7 @@ __all__ = [
     "IntegralConfig",
     "RegisteredEnclosureConfig",
     "prove",
+    "close_default_prove_client",
     "find_roots",
     "find_unique_root",
     "integrate",

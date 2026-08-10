@@ -32,6 +32,8 @@ from leancert.client import LeanClient
 from leancert.config import Config
 from leancert.domain import Box, Interval
 
+pytestmark = pytest.mark.integration
+
 # =============================================================================
 # Parallel Verification Tests
 # =============================================================================

@@ -12,9 +12,21 @@ x = ast.var("x")
 result = lc.prove(ast.sin(x) <= 1, where={x: (0, 1)})
 
 if isinstance(result, lc.Verified):
-    export = result.export_lean_project("verified-sine")
-    assert isinstance(export, lc.ExportVerified)
+    export = result.export_lean_project("verified-sine", verify=False)
+    assert isinstance(export, lc.ExportPrepared)
 ```
+
+Export defaults to `verify=False`, which only prepares the small, pinned replay
+project. Independently rebuild it when desired:
+
+```bash
+leancert verify verified-sine/ --require-trust kernel
+```
+
+Passing `verify=True` performs both steps immediately. On a cold machine this
+can install Lean and hydrate Mathlib and the exact LeanCert environment, which
+may take several minutes and several gigabytes. The result is typed: resource,
+dependency, or verification failures do not publish a partial artifact.
 
 The exported project reconstructs the exact lowered LeanCert expression, box,
 bound, and global-optimization configuration retained by the bridge. It closes

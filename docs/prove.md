@@ -20,6 +20,20 @@ elif isinstance(result, lc.Inconclusive):
     print(result.reason)
 ```
 
+Module-level `lc.prove(...)` lazily retains one managed Lean client for reuse
+within the Python process. For an explicit lifetime—especially in notebooks,
+services, and proof batches—use a context-managed solver:
+
+```python
+with lc.Solver() as solver:
+    first = solver.prove(x**2 <= 1, where={x: (-1, 1)})
+    second = solver.prove(x < 2, where={x: (0, 1)})
+```
+
+The first checked proof may download and prepare the managed Bridge. Later
+proofs reuse the same process. Call `lc.close_default_prove_client()` if an
+application needs to release the module-level convenience client early.
+
 ## Checked bound surface
 
 The first route supports exact, universally quantified real bounds over closed
@@ -32,9 +46,9 @@ two_sided = lc.prove(
     where={x: (-1, 1)},
 )
 
-# Either side may be an expression. LeanCert checks sin(x) - x <= 0,
-# while retaining and exporting the semantic claim sin(x) <= x.
-comparison = lc.prove(ast.sin(x) <= x, where={x: (0, 1)})
+# Either side may be an expression. LeanCert retains and exports the original
+# semantic comparison rather than only its normalized checker expression.
+comparison = lc.prove(x <= x + 1, where={x: (0, 1)})
 
 # Contract 2.7 proves a strict target from a checked interior bound.
 strict = lc.prove(x < 2, where={x: (0, 1)})

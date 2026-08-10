@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 import leancert as lc
+import leancert.proving as proving_module
 from leancert import ast
 from leancert.protocol import BridgeHandshake
 
@@ -60,6 +61,30 @@ class FakeCheckedClient:
         if status != "verified":
             response["certificate"] = None
         return response
+
+
+def test_module_prove_reuses_one_managed_client(monkeypatch):
+    clients = []
+
+    class ManagedFakeClient(FakeCheckedClient):
+        def __init__(self):
+            super().__init__(("verified", "verified"))
+            self.closed = False
+            clients.append(self)
+
+        def close(self):
+            self.closed = True
+
+    lc.close_default_prove_client()
+    monkeypatch.setattr(proving_module, "LeanClient", ManagedFakeClient)
+    x = ast.var("x")
+
+    assert isinstance(lc.prove(x <= 1, where={x: (0, 1)}), lc.Verified)
+    assert isinstance(lc.prove(x <= 1, where={x: (0, 1)}), lc.Verified)
+    assert len(clients) == 1
+
+    lc.close_default_prove_client()
+    assert clients[0].closed
 
 
 def test_public_prove_checks_normalized_upper_bound():

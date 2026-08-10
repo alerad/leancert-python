@@ -5,10 +5,11 @@
 Tests for symbolic simplification.
 """
 
-import pytest
 from fractions import Fraction
 
-from leancert import var, const, simplify, expand, Solver, Box
+import pytest
+
+from leancert import Box, Solver, const, expand, simplify, var
 
 
 class TestSimplification:
@@ -116,6 +117,7 @@ class TestSimplification:
         assert result.free_vars() == frozenset({'size_tokens'})
 
 
+@pytest.mark.integration
 class TestSolverIntegration:
     """Test simplification integration with solver."""
 

@@ -62,7 +62,7 @@ class ConjunctionResult(ProofResult):
 class VerifiedConjunction(ConjunctionResult):
     """Every non-trivial child has checked evidence; exact children are labeled."""
 
-    def export_lean_project(self, path: str, *, verify: bool = True, runtime: Any = None):
+    def export_lean_project(self, path: str, *, verify: bool = False, runtime: Any = None):
         from .export import export_verified_conjunction
 
         return export_verified_conjunction(self, path, verify=verify, runtime=runtime)
@@ -365,7 +365,7 @@ class Verified(BoundCheck):
         self,
         path: str,
         *,
-        verify: bool = True,
+        verify: bool = False,
         runtime: Any = None,
     ):
         """Export and optionally kernel-check the retained fixed certificates."""
@@ -387,7 +387,7 @@ class VerifiedRegisteredEnclosure(Verified):
             results.append(certificate.replay(client))
         return tuple(results)
 
-    def export_lean_project(self, path: str, *, verify: bool = True, runtime: Any = None):
+    def export_lean_project(self, path: str, *, verify: bool = False, runtime: Any = None):
         return ExportUnsupported(
             "registered enclosure export requires packaging the downstream Lean modules; "
             "use fixed Bridge replay in the same profiled environment"
@@ -469,7 +469,7 @@ class VerifiedSystemRoot(SystemRootResult):
 
     certificate: ReplayableKrawczykCertificate
 
-    def export_lean_project(self, path: str, *, verify: bool = True, runtime: Any = None):
+    def export_lean_project(self, path: str, *, verify: bool = False, runtime: Any = None):
         """Export and optionally kernel-check the fixed Krawczyk certificate."""
         from .export import export_verified_system_root
 
@@ -519,7 +519,7 @@ class ScalarRootResult(ProofResult):
 class VerifiedRootExistence(ScalarRootResult):
     certificate: ReplayableScalarRootCertificate
 
-    def export_lean_project(self, path: str, *, verify: bool = True, runtime: Any = None):
+    def export_lean_project(self, path: str, *, verify: bool = False, runtime: Any = None):
         from .export import export_verified_scalar_root
 
         return export_verified_scalar_root(self, path, verify=verify, runtime=runtime)
@@ -529,7 +529,7 @@ class VerifiedRootExistence(ScalarRootResult):
 class VerifiedUniqueRoot(ScalarRootResult):
     certificate: ReplayableScalarRootCertificate
 
-    def export_lean_project(self, path: str, *, verify: bool = True, runtime: Any = None):
+    def export_lean_project(self, path: str, *, verify: bool = False, runtime: Any = None):
         from .export import export_verified_scalar_root
 
         return export_verified_scalar_root(self, path, verify=verify, runtime=runtime)
@@ -539,7 +539,7 @@ class VerifiedUniqueRoot(ScalarRootResult):
 class VerifiedRootExclusion(ScalarRootResult):
     certificate: ReplayableScalarRootCertificate
 
-    def export_lean_project(self, path: str, *, verify: bool = True, runtime: Any = None):
+    def export_lean_project(self, path: str, *, verify: bool = False, runtime: Any = None):
         from .export import export_verified_scalar_root
 
         return export_verified_scalar_root(self, path, verify=verify, runtime=runtime)
@@ -600,7 +600,7 @@ class CheckedIntegralResult(ProofResult):
 class VerifiedIntegralEquality(CheckedIntegralResult):
     certificate: ReplayableIntegralCertificate
 
-    def export_lean_project(self, path: str, *, verify: bool = True, runtime: Any = None):
+    def export_lean_project(self, path: str, *, verify: bool = False, runtime: Any = None):
         from .export import export_verified_integral
 
         return export_verified_integral(self, path, verify=verify, runtime=runtime)
@@ -610,7 +610,7 @@ class VerifiedIntegralEquality(CheckedIntegralResult):
 class VerifiedIntegralBound(CheckedIntegralResult):
     certificate: ReplayableIntegralCertificate
 
-    def export_lean_project(self, path: str, *, verify: bool = True, runtime: Any = None):
+    def export_lean_project(self, path: str, *, verify: bool = False, runtime: Any = None):
         from .export import export_verified_integral
 
         return export_verified_integral(self, path, verify=verify, runtime=runtime)
@@ -684,7 +684,7 @@ class VerifiedEventualBound(EventualBoundResult):
 
     certificate: ReplayableEventualCertificate
 
-    def export_lean_project(self, path: str, *, verify: bool = True, runtime: Any = None):
+    def export_lean_project(self, path: str, *, verify: bool = False, runtime: Any = None):
         """Export and optionally kernel-check the retained fixed cutoff."""
         from .export import export_verified_eventual_bound
 

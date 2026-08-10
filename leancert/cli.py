@@ -48,6 +48,13 @@ def _parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     if args.command == "doctor":
+        if not args.json:
+            print(
+                "leancert: preparing the managed Lean bridge "
+                "(a cold start may download dependencies)...",
+                file=sys.stderr,
+                flush=True,
+            )
         doctor_report = diagnose(args.package_ref)
         if args.json:
             print(json.dumps(doctor_report.to_dict(), sort_keys=True))
@@ -57,6 +64,13 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"[{marker}] {check.name}: {check.detail}")
         return 0 if doctor_report.healthy else 1
     if args.command == "verify":
+        if args.format != "json":
+            print(
+                "leancert: independently rebuilding exported proof projects "
+                "(a cold cache may hydrate large dependencies)...",
+                file=sys.stderr,
+                flush=True,
+            )
         try:
             verification_report = verify_exported_projects(
                 args.paths,

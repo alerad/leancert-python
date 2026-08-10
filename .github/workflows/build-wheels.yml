@@ -29,6 +29,8 @@ jobs:
           pip install
           "lean-runtime==${LEAN_RUNTIME_VERSION}"
       - run: pip install -e '.[dev]'
+      - name: Reject syntax and undefined-name regressions
+        run: python -m ruff check leancert --exclude tests --select E9,F63,F7,F82
       - name: Run Bridge-independent safety and contract tests
         run: >-
           pytest -q

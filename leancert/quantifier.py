@@ -27,20 +27,22 @@ that LeanCert can solve with rigorous certificates.
 """
 
 from __future__ import annotations
-from dataclasses import dataclass, field
-from fractions import Fraction
-from typing import Optional, Union, Callable, Any, TYPE_CHECKING, Literal
-from enum import Enum
+
 import math
+from dataclasses import dataclass, field
+from enum import Enum
+from fractions import Fraction
+from typing import TYPE_CHECKING, Any, Callable, Literal, Optional, Union
 
 if TYPE_CHECKING:
-    from .solver import Solver
     from .expr import Expr
+    from .result import LipschitzResult
+    from .solver import Solver
 
-from .domain import Interval, Box, normalize_domain
 from .config import Config
-from .result import Certificate, Verified
+from .domain import Box, Interval, normalize_domain
 from .rational import to_fraction
+from .result import Certificate, Verified
 
 
 class QuantifierPattern(Enum):

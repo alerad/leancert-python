@@ -79,48 +79,52 @@ from leancert import ast
 x = ast.var("x")
 claim = ast.sin(x) <= 1
 
-# Check it for every x in the closed interval [0, 1]
-result = lc.prove(claim, where={x: (0, 1)})
-if isinstance(result, lc.Verified):
-    print(f"Verified claim {result.claim_id}")
-    print(result.provenance)
-else:
-    print(type(result).__name__, result.reason)
+# A Solver keeps one managed Lean process alive for the whole batch. The first
+# proof prepares it; subsequent proofs normally reuse it in milliseconds.
+with lc.Solver() as solver:
+    result = solver.prove(claim, where={x: (0, 1)})
+    if isinstance(result, lc.Verified):
+        print(f"Verified claim {result.claim_id}")
+        print(result.provenance)
+    else:
+        print(type(result).__name__, result.reason)
 
-# Two-sided claims use an explicit conjunction.
-two_sided = lc.prove(
-    ast.all_of(x >= 0, x <= 1),
-    where={x: (0, 1)},
-)
+    # Two-sided claims use an explicit conjunction.
+    two_sided = solver.prove(
+        ast.all_of(x >= 0, x <= 1),
+        where={x: (0, 1)},
+    )
 
-# Compare two expressions directly; export retains this original theorem.
-comparison = lc.prove(ast.sin(x) <= x, where={x: (0, 1)})
+    # Compare two expressions directly; export retains this original theorem.
+    comparison = solver.prove(x <= x + 1, where={x: (0, 1)})
 
-# Strict targets retain an exact interior checked bound for replay.
-strict = lc.prove(x < 2, where={x: (0, 1)})
+    # Strict targets retain an exact interior checked bound for replay.
+    strict = solver.prove(x < 2, where={x: (0, 1)})
 
-# Independent conjunction children are routed and retained separately.
-combined = lc.prove(
-    ast.all_of(x**2 <= 1, ast.sin(x) <= 1),
-    where={x: (-1, 1)},
-)
+    # Independent conjunction children are routed and retained separately.
+    combined = solver.prove(
+        ast.all_of(x**2 <= 1, ast.sin(x) <= 1),
+        where={x: (-1, 1)},
+    )
 
-# Discover and certify a cutoff for every n at or beyond it.
-from fractions import Fraction
-n = ast.var("n", sort=ast.NATURAL)
-eventual = lc.prove(
-    ast.eventually(3 / n**2 <= Fraction(1, 1000), variable=n)
-)
+    # Discover and certify a cutoff for every n at or beyond it.
+    from fractions import Fraction
+    n = ast.var("n", sort=ast.NATURAL)
+    eventual = solver.prove(
+        ast.eventually(3 / n**2 <= Fraction(1, 1000), variable=n)
+    )
 
-# Prove that one—and only one—root lies in the supplied interval.
-unique = lc.prove(ast.unique_root(x, variable=x, within=(-1, 1)))
-if isinstance(unique, lc.VerifiedUniqueRoot):
-    unique.export_lean_project("verified-unique-root")
+    # Prove that one—and only one—root lies in the supplied interval.
+    unique = solver.prove(ast.unique_root(x, variable=x, within=(-1, 1)))
+    if isinstance(unique, lc.VerifiedUniqueRoot):
+        # Preparing files is cheap. Pass verify=True, or run `leancert verify`
+        # later, to hydrate dependencies and independently rebuild the proof.
+        unique.export_lean_project("verified-unique-root", verify=False)
 
-# Exact polynomial integration and checked one-sided bounds.
-area = ast.integral(x**2, x, 0, 1)
-exact_area = lc.prove(ast.eq(area, Fraction(1, 3)))
-bounded_area = lc.prove(area <= Fraction(1, 2))
+    # Exact polynomial integration and checked one-sided bounds.
+    area = ast.integral(x**2, x, 0, 1)
+    exact_area = solver.prove(ast.eq(area, Fraction(1, 3)))
+    bounded_area = solver.prove(area <= Fraction(1, 2))
 ```
 
 ## Neural Network Verification
@@ -166,7 +170,12 @@ print(verified)  # True - proven for every possible input!
 
 ## Supported Functions
 
-`sin`, `cos`, `tan`, `exp`, `log`, `sqrt`, `abs`, `sinh`, `cosh`, `tanh`, `atan`, `erf`, `sinc`, and more.
+The checked `ast` + `prove` route currently supports arithmetic plus `sin`,
+`cos`, and `exp`. Other constructors exposed by the legacy expression API are
+capability-gated and may return `Unsupported`; their presence in Python does
+not imply that the negotiated Bridge can certify them. See the
+[current capability notes](https://docs.leancert.io/python/proving/)
+for the exact distinction.
 
 ## Why LeanCert?
 
@@ -188,11 +197,22 @@ certificate.
 
 ## Links
 
-- [Documentation](https://leancert.readthedocs.io)
+- [Documentation](https://docs.leancert.io/python/)
 - [Python SDK Repo](https://github.com/alerad/leancert-python)
 - [Lean Core Repo](https://github.com/alerad/leancert)
 - [Bridge Binaries Repo](https://github.com/alerad/leancert-bridge)
 - [Examples](https://github.com/alerad/leancert-python/tree/main/examples)
+
+## Development tests
+
+`pytest` runs the Bridge-independent suite by default. Tests that launch a real
+managed Lean process are explicit because a cold run may download and build
+large dependencies:
+
+```bash
+pytest                         # fast/default suite
+pytest -m integration          # managed-Bridge integration suite
+```
 
 ## License
 
