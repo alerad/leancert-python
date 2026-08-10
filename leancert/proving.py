@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import atexit
+import threading
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from fractions import Fraction
@@ -41,6 +43,30 @@ from .result import (
     VerifiedSystemRoot,
     VerifiedUniqueRoot,
 )
+
+_DEFAULT_PROVE_CLIENT: LeanClient | None = None
+_DEFAULT_PROVE_CLIENT_LOCK = threading.Lock()
+
+
+def _default_prove_client() -> LeanClient:
+    """Lazily create the process-wide client used by the convenience API."""
+    global _DEFAULT_PROVE_CLIENT
+    with _DEFAULT_PROVE_CLIENT_LOCK:
+        if _DEFAULT_PROVE_CLIENT is None:
+            _DEFAULT_PROVE_CLIENT = LeanClient()
+        return _DEFAULT_PROVE_CLIENT
+
+
+def close_default_prove_client() -> None:
+    """Close and forget the client retained by module-level :func:`prove`."""
+    global _DEFAULT_PROVE_CLIENT
+    with _DEFAULT_PROVE_CLIENT_LOCK:
+        client, _DEFAULT_PROVE_CLIENT = _DEFAULT_PROVE_CLIENT, None
+    if client is not None:
+        client.close()
+
+
+atexit.register(close_default_prove_client)
 
 
 def _candidate_fraction(value: object, maximum_denominator: int) -> Fraction:
@@ -257,13 +283,8 @@ def prove(
     if logical is False:
         return NormalizedFalse(claim, normalized_claim, ast.semantic_digest(normalized_claim))
 
-    owns_client = client is None
-    active_client = LeanClient() if client is None else client
-    try:
-        return _prove_normalized(claim, normalized_claim, config, active_client)
-    finally:
-        if owns_client:
-            active_client.close()
+    active_client = _default_prove_client() if client is None else client
+    return _prove_normalized(claim, normalized_claim, config, active_client)
 
 
 def _bounded_conjunction_children(claim: ast.Claim) -> tuple[ast.Claim, ...] | None:

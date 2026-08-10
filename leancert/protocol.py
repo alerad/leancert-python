@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from fractions import Fraction
 from types import MappingProxyType
-from typing import Any
+from typing import Any, Literal, overload
 
 from .exceptions import ProtocolViolation
 
@@ -26,6 +26,18 @@ def _object(value: Any, name: str) -> Mapping[str, Any]:
     if not isinstance(value, Mapping):
         raise ProtocolViolation(f"{name} must be a JSON object")
     return value
+
+
+@overload
+def _string(value: Any, name: str, *, optional: Literal[False] = False) -> str: ...
+
+
+@overload
+def _string(value: Any, name: str, *, optional: Literal[True]) -> str | None: ...
+
+
+@overload
+def _string(value: Any, name: str, *, optional: bool) -> str | None: ...
 
 
 def _string(value: Any, name: str, *, optional: bool = False) -> str | None:
@@ -179,7 +191,7 @@ class RegisteredEnclosureRule:
         if isinstance(priority, bool) or not isinstance(priority, int) or priority < 0:
             raise ProtocolViolation(f"{name}.priority must be a non-negative integer")
         assert all(strings)
-        return cls(*strings, priority)
+        return cls(strings[0], strings[1], strings[2], strings[3], priority)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1057,12 +1069,11 @@ class BoundOperationOutcome:
             raise ProtocolViolation("only verified check_bound results may retain a certificate")
         if expected_direction is not None and direction != expected_direction:
             raise ProtocolViolation("check_bound direction contradicts the request")
-        if (
-            certificate is not None
-            and certificate.payload is not None
-            and certificate.payload.direction != direction
-        ):
-            raise ProtocolViolation("replay payload direction contradicts bound outcome")
+        if certificate is not None and certificate.payload is not None:
+            if not isinstance(certificate.payload, ReplayBoundPayload):
+                raise ProtocolViolation("check_bound retained an incompatible replay payload")
+            if certificate.payload.direction != direction:
+                raise ProtocolViolation("replay payload direction contradicts bound outcome")
         return cls(status, direction, enclosure, backend, certificate, MappingProxyType(dict(obj)))
 
 

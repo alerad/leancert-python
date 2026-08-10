@@ -8,20 +8,20 @@ Tests the AlgebraicAnalyzer class and ALGEBRAIC split strategy that uses:
 - Dependency reduction analysis
 """
 
-import pytest
 from fractions import Fraction
 
-from leancert import var, sin, cos, exp, Solver
-from leancert.domain import Box, Interval
+import pytest
+
+from leancert import Solver, cos, exp, sin, var
 from leancert.adaptive import (
     AdaptiveConfig,
-    SplitStrategy,
-    SplitCandidate,
     AlgebraicAnalyzer,
     DomainSplitter,
+    SplitCandidate,
+    SplitStrategy,
     verify_bound_adaptive,
 )
-
+from leancert.domain import Box, Interval
 
 # =============================================================================
 # AlgebraicAnalyzer Tests
@@ -269,6 +269,7 @@ class TestAlgebraicSplitStrategy:
 # Integration Tests
 # =============================================================================
 
+@pytest.mark.integration
 class TestAlgebraicIntegration:
     """Integration tests for algebraic splitting with verification."""
 

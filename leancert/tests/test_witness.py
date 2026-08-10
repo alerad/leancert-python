@@ -13,19 +13,22 @@ Goal forms supported:
 - ∃ x ∈ I, f(x) = 0       (root witness)
 """
 
-import pytest
 from fractions import Fraction
 
-from leancert import var, sin, cos, exp
-from leancert.solver import Solver
-from leancert.result import (
-    WitnessResult,
-    WitnessPoint,
-    MinWitnessResult,
-    MaxWitnessResult,
-    RootWitnessResult,
-)
+import pytest
+
+from leancert import cos, exp, sin, var
 from leancert.config import Config
+from leancert.result import (
+    MaxWitnessResult,
+    MinWitnessResult,
+    RootWitnessResult,
+    WitnessPoint,
+    WitnessResult,
+)
+from leancert.solver import Solver
+
+pytestmark = pytest.mark.integration
 
 
 class TestWitnessResult:
@@ -308,8 +311,8 @@ class TestCertificateWithWitness:
 
     def test_certificate_round_trip(self):
         """Certificate should survive save/load round trip."""
-        import tempfile
         import os
+        import tempfile
 
         x = var('x')
         with Solver() as solver:

@@ -1,8 +1,11 @@
 # Tests for the high-level API
 # TDD: Write tests first, then implement
 
-import pytest
 from fractions import Fraction
+
+import pytest
+
+pytestmark = pytest.mark.integration
 
 
 class TestFindBoundsAPI:
@@ -48,8 +51,9 @@ class TestFindBoundsAPI:
 
     def test_find_bounds_with_trig(self):
         """sin(x) on [0, pi]."""
-        import leancert as lf
         import math
+
+        import leancert as lf
 
         x = lf.var('x')
         result = lf.find_bounds(lf.sin(x), {'x': (0, math.pi)})

@@ -130,7 +130,7 @@ def main():
     print(f"  Output in [-1, 10]: {verified} ✓" if verified else f"  Output in [-1, 10]: {verified} ✗")
 
     # Verify class separation in XOR-positive region
-    print("\nVerifying XOR-positive region (x>0, y<0) has output > 0:")
+    print("\nVerifying XOR-positive region (x>0, y<0) has output ≥ 0:")
     output_xor = lc.forward_interval(xor_net, {'x': (0.1, 1), 'y': (-1, -0.1)})
     print(f"  Output ∈ [{float(output_xor[0].lo):.4f}, {float(output_xor[0].hi):.4f}]")
 
@@ -139,7 +139,7 @@ def main():
         {'x': (0.1, 1), 'y': (-1, -0.1)},
         output_lower=0,
     )
-    print(f"  Output > 0: {verified_pos} ✓" if verified_pos else f"  Output > 0: {verified_pos} ✗")
+    print(f"  Output ≥ 0: {verified_pos} ✓" if verified_pos else f"  Output ≥ 0: {verified_pos} ✗")
 
     # ===== Example 2: Digit Classifier =====
     print("\n[2] Tiny Digit Classifier Verification")

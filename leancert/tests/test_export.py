@@ -52,7 +52,7 @@ def test_verified_result_retains_replay_identity_and_exports_project(tmp_path):
     replay = result.checks[0].replay_certificate
     assert replay is not None and replay.payload_digest.startswith("sha256:")
 
-    exported = result.export_lean_project(str(tmp_path / "proof"), verify=False)
+    exported = result.export_lean_project(str(tmp_path / "proof"))
     assert isinstance(exported, lc.ExportPrepared)
     source = (tmp_path / "proof" / "LeanCertExport.lean").read_text()
     assert "decide +kernel" in source
@@ -269,7 +269,7 @@ def test_export_verification_checks_source_in_originating_environment(tmp_path):
         return Environment()
 
     runtime = SimpleNamespace(environment=open_environment)
-    exported = result.export_lean_project(str(tmp_path / "proof"), runtime=runtime)
+    exported = result.export_lean_project(str(tmp_path / "proof"), verify=True, runtime=runtime)
     assert isinstance(exported, lc.ExportVerified)
     assert observed["environment_id"] == ENVIRONMENT_ID
     assert observed["entrypoint"] == "LeanCertExport.lean"
@@ -293,7 +293,7 @@ def test_failed_export_is_atomic(tmp_path, monkeypatch):
         lambda: SimpleNamespace(environment=lambda environment_id: environment),
     )
 
-    exported = result.export_lean_project(str(tmp_path / "proof"))
+    exported = result.export_lean_project(str(tmp_path / "proof"), verify=True)
     assert isinstance(exported, lc.ExportVerificationMismatch)
     assert not (tmp_path / "proof").exists()
     assert not list(tmp_path.glob(".proof.*"))
@@ -314,7 +314,7 @@ def test_export_timeout_is_typed_and_atomic(tmp_path, monkeypatch):
         "leancert.export.Runtime",
         lambda: SimpleNamespace(environment=lambda environment_id: environment),
     )
-    exported = result.export_lean_project(str(tmp_path / "proof"))
+    exported = result.export_lean_project(str(tmp_path / "proof"), verify=True)
     assert isinstance(exported, lc.ExportResourceLimit)
     assert exported.timeout_seconds == 900
     assert exported.build_output == "still building"
@@ -361,7 +361,9 @@ def test_ready_program_result_hydrates_full_environment_only_for_kernel_replay(
 
     monkeypatch.setattr("leancert.export.LeanClient", ManagedClient)
 
-    exported = result.export_lean_project(str(tmp_path / "program-proof"), runtime=runtime)
+    exported = result.export_lean_project(
+        str(tmp_path / "program-proof"), verify=True, runtime=runtime
+    )
     assert isinstance(exported, lc.ExportVerified)
     assert observed == {"package_ref": client.package_ref, "runtime": runtime}
     provenance = json.loads((tmp_path / "program-proof" / "provenance.json").read_text())

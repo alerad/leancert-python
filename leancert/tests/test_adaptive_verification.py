@@ -15,26 +15,37 @@ Test Categories:
 7. Proof Generation - Tests for Lean proof assembly
 """
 
-import pytest
 from fractions import Fraction
 from unittest.mock import Mock, patch
 
+import pytest
+
 from leancert import (
-    var, sin, cos, exp, log, sqrt,
-    Solver, Config, Interval, Box,
+    Box,
+    Config,
+    Interval,
+    Solver,
+    cos,
+    exp,
+    log,
+    sin,
+    sqrt,
+    var,
 )
 from leancert.adaptive import (
-    AdaptiveResult,
     AdaptiveConfig,
+    AdaptiveResult,
+    CEGARVerifier,
+    DomainSplitter,
+    LeanProofAssembler,
     SplitStrategy,
     Subdomain,
     SubdomainResult,
-    DomainSplitter,
-    LeanProofAssembler,
-    CEGARVerifier,
     verify_bound_adaptive,
 )
 from leancert.result import FailureDiagnosis
+
+pytestmark = pytest.mark.integration
 
 
 # =============================================================================
@@ -665,8 +676,8 @@ class TestModuleLevelFunction:
 
     def test_module_function_works(self):
         """Module-level function should work correctly."""
-        from leancert.solver import verify_bound_adaptive
         from leancert import var
+        from leancert.solver import verify_bound_adaptive
 
         x = var('x')
         result = verify_bound_adaptive(
