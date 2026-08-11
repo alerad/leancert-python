@@ -329,6 +329,34 @@ class LeanClient:
     def program_copy_id(self) -> str | None:
         return None if self._program is None else self._program.copy_id
 
+    def _new_worker_client(self) -> LeanClient:
+        """Clone this client's execution route for one parallel worker.
+
+        Ready-program execution and managed source environments are deliberately
+        separate routes.  In particular, reading ``environment`` on a
+        ready-program client would hydrate the full source environment merely to
+        start a worker.  Resolve the active route once here and pass that exact
+        target to the worker instead.
+        """
+        target = (
+            {"program": self.program}
+            if self.uses_ready_program
+            else {"environment": self.environment}
+        )
+        return LeanClient(
+            package_ref=self.package_ref,
+            runtime=self.runtime,
+            execution_policy=self.execution_policy,
+            resolution_timeout_seconds=self.resolution_timeout_seconds,
+            artifact_command=self.artifact_command,
+            command=self.command,
+            enclosure_profile=self.enclosure_profile,
+            program_library=self.program_library,
+            program_reference=self.program_reference,
+            require_program_profile=self.require_program_profile,
+            **target,
+        )
+
     @property
     def execution_id(self) -> str | None:
         return None if self._session is None else self._session.execution_id
@@ -1278,6 +1306,20 @@ class LeanClient:
     def __exit__(self, *args) -> None:
         """Context manager exit."""
         self.close()
+
+    def __del__(self) -> None:
+        """Best-effort fallback for a client abandoned without ``close``.
+
+        Context management remains the deterministic lifecycle API. This
+        fallback prevents abandoned managed sessions from accumulating process
+        handles and file descriptors in long-lived applications and test runs.
+        """
+        try:
+            self.close()
+        except Exception:
+            # Finalizers can run during partial construction or interpreter
+            # shutdown, when attributes and imported modules may be unavailable.
+            pass
 
 
 def _parse_rat(data: dict) -> Fraction:

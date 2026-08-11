@@ -1242,14 +1242,7 @@ class CEGARVerifier:
                 return self.solver
             solver = getattr(worker_local, "solver", None)
             if solver is None:
-                client = LeanClient(
-                    package_ref=source_client.package_ref,
-                    runtime=source_client.runtime,
-                    environment=source_client.environment,
-                    execution_policy=source_client.execution_policy,
-                    command=source_client.command,
-                    enclosure_profile=source_client.enclosure_profile,
-                )
+                client = source_client._new_worker_client()
                 solver = Solver(
                     client=client,
                     auto_simplify=self.solver._auto_simplify,

@@ -14,10 +14,28 @@ on:
       - 'docs/**'
       - 'pyproject.toml'
       - 'MANIFEST.in'
+      - 'scripts/check_wheel.py'
       - '.github/workflows/build-wheels.yml'
   workflow_dispatch:
 
 jobs:
+  compatibility-tests:
+    name: Python ${{ matrix.python-version }} compatibility
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.10', '3.11', '3.12', '3.13', '3.14']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: pip install -e '.[test]'
+      - name: Run the complete Bridge-independent suite
+        run: pytest -q
+
   safety-tests:
     runs-on: ubuntu-latest
     steps:
@@ -28,7 +46,7 @@ jobs:
       - run: >-
           pip install
           "lean-runtime==${LEAN_RUNTIME_VERSION}"
-      - run: pip install -e '.[dev]'
+      - run: pip install -e '.[test,lint]'
       - name: Reject syntax and undefined-name regressions
         run: python -m ruff check leancert --exclude tests --select E9,F63,F7,F82
       - name: Run Bridge-independent safety and contract tests
@@ -61,25 +79,12 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         run: >-
           python -c 'import os,tomllib; version=tomllib.load(open("pyproject.toml","rb"))["project"]["version"]; assert os.environ["GITHUB_REF_NAME"] == "v" + version'
-      - run: pip install build
+      - run: pip install '.[release]'
       - run: python -m build
-      - name: Assert a pure Python wheel
-        shell: bash
-        run: |
-          set -euo pipefail
-          test "$(find dist -name '*-py3-none-any.whl' | wc -l)" -eq 1
-          python - <<'PY'
-          import zipfile
-          from pathlib import Path
-
-          wheel = next(Path("dist").glob("*.whl"))
-          with zipfile.ZipFile(wheel) as archive:
-              forbidden = [
-                  name for name in archive.namelist()
-                  if "/bin/" in name or name.endswith(("lean_bridge", "lean_bridge.exe"))
-              ]
-          assert not forbidden, forbidden
-          PY
+      - name: Assert clean pure-Python wheel contents
+        run: python scripts/check_wheel.py dist/*.whl
+      - name: Validate distribution metadata
+        run: twine check dist/*
       - uses: actions/upload-artifact@v4
         with:
           name: distributions
@@ -96,7 +101,7 @@ jobs:
     steps:
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: '3.12'
       - uses: actions/download-artifact@v4
         with:
           name: distributions
@@ -137,10 +142,11 @@ jobs:
     needs: build-distributions
     if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: '3.12'
       - uses: actions/download-artifact@v4
         with:
           name: distributions
@@ -169,10 +175,21 @@ jobs:
           assert result.provenance.program_id.startswith("program_")
           assert result.provenance.execution_id.startswith("execution_")
           print(result.provenance.program_id)
+
+          legacy_x = lc.var("x")
+          with lc.Solver() as solver:
+              adaptive = lc.verify_bound_adaptive(
+                  solver,
+                  legacy_x * legacy_x,
+                  {"x": (-1, 1)},
+                  upper=2,
+                  adaptive_config=lc.AdaptiveConfig(parallel=True, max_splits=2),
+              )
+          assert adaptive.verified, adaptive
           PY
 
   publish:
-    needs: [safety-tests, build-distributions, test-wheel, managed-runtime-integration]
+    needs: [compatibility-tests, safety-tests, build-distributions, test-wheel, managed-runtime-integration]
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:

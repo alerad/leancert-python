@@ -216,9 +216,16 @@ managed Lean process are explicit because a cold run may download and build
 large dependencies:
 
 ```bash
+pip install -e ".[test]"
 pytest                         # fast/default suite
 pytest -m integration          # managed-Bridge integration suite
 ```
+
+LeanCert supports CPython 3.10 through 3.14. The complete default suite runs
+on every supported Python version in CI. Runtime requirements stay minimal;
+linting, type checking, PyTorch support, and release tooling are isolated in
+the `lint`, `typecheck`, `pytorch`, and `release` extras respectively. The
+`dev` extra remains a convenient test/lint/type-check bundle.
 
 ## License
 
