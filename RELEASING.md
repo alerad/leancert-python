@@ -2,10 +2,19 @@
 
 ## 1. Release runtime dependencies
 
-Release the minimum compatible `lean-runtime` version first. Update the exact
-Bridge package reference in `leancert/client.py` only when the SDK needs a new
-mathematical Bridge contract. Core, Bridge, runtime, and SDK versions remain
-independent; the runtime lock records their exact revisions together.
+Release the minimum compatible `lean-runtime` version first. Then publish the
+Bridge's multi-platform ready program and copy the final immutable OCI index
+digest into `DEFAULT_BRIDGE_PROGRAM_REFERENCE` in `leancert/client.py`.
+
+Do not copy Core, Lean, protocol, or capability versions into the SDK. Bridge
+CI derives them from the resolved Lake graph and live binary handshake and
+content-addresses them inside the program description. The SDK integration
+contract must download the pinned digest and verify that embedded profile
+against the running handshake before release.
+
+The exact Bridge package reference remains the source-build fallback used for
+replay audits and custom registered-enclosure profiles. Core, Bridge, Runtime,
+and SDK versions remain independent.
 
 ## 2. Validate wheel build
 

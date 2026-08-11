@@ -25,6 +25,12 @@ the precompiled Bridge and its runtime libraries, not a Mathlib source/build
 tree. Later calls reuse it; no Bridge path or system-wide Lean installation is
 needed.
 
+Profile-enabled SDK releases pin that multi-platform program by immutable OCI
+digest. Its content-addressed provenance records the exact Core and Bridge
+revisions, Lean toolchain, protocol, and capability identity. Before accepting
+checked results, the SDK verifies that this profile agrees with both the
+program description and the running Bridge handshake.
+
 Full LeanCert and Mathlib environments are hydrated lazily only for independent
 kernel replay, source rebuild audits, or custom registered-enclosure profiles.
 Those environments remain distinct from ready programs in result provenance: a

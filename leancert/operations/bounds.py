@@ -205,6 +205,11 @@ def bridge_provenance(client: Any) -> BridgeProvenance:
         # avoid touching LeanClient.environment because that property hydrates.
         environment = vars(client).get("environment")
     program = getattr(client, "_program", None)
+    program_profile = (
+        getattr(getattr(program, "description", None), "provenance", {})
+        if program is not None
+        else {}
+    )
     lock = getattr(environment, "lock", None)
     packages = () if lock is None else lock.packages
     program_toolchain = getattr(getattr(program, "description", None), "toolchain", None)
@@ -235,7 +240,9 @@ def bridge_provenance(client: Any) -> BridgeProvenance:
         lean_version=info.get("lean_version"),
         leancert_version=info.get("leancert_version"),
         capability_digest=contract.capability_digest,
-        lean_toolchain=program_toolchain or resolved_toolchain,
+        lean_toolchain=(program_profile.get("lean.toolchain") if program_profile else None)
+        or program_toolchain
+        or resolved_toolchain,
         leancert_source=(
             dependencies.leancert_source
             if leancert is None and dependencies is not None
@@ -251,19 +258,25 @@ def bridge_provenance(client: Any) -> BridgeProvenance:
         if leancert is not None or dependencies is not None
         else info.get("leancert_version"),
         leancert_resolved_revision=(
-            dependencies.leancert_resolved_revision
-            if leancert is None and dependencies is not None
-            else leancert.revision
+            program_profile.get("leancert.core.revision") if program_profile else None
         )
-        if leancert is not None or dependencies is not None
-        else info.get("leancert_version"),
+        or (
+            (
+                dependencies.leancert_resolved_revision
+                if leancert is None and dependencies is not None
+                else leancert.revision
+            )
+            if leancert is not None or dependencies is not None
+            else info.get("leancert_version")
+        ),
         leancert_tree_hash=None if leancert is None else leancert.tree_hash,
         bridge_source=(
             "https://github.com/alerad/leancert-bridge.git" if bridge is None else bridge.url
         ),
         bridge_resolved_revision=(
-            DEFAULT_BRIDGE_SOURCE_REVISION if bridge is None else bridge.revision
-        ),
+            program_profile.get("leancert.bridge.revision") if program_profile else None
+        )
+        or (DEFAULT_BRIDGE_SOURCE_REVISION if bridge is None else bridge.revision),
         bridge_tree_hash=None if bridge is None else bridge.tree_hash,
     )
 

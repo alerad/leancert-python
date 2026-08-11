@@ -1,7 +1,9 @@
 """Bridge response validation without launching a bridge process."""
 
 import io
+import json
 import threading
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -9,7 +11,7 @@ from lean_runtime import EnvironmentError as RuntimeEnvironmentError
 
 import leancert.client as client_module
 from leancert.client import LeanClient
-from leancert.exceptions import BridgeError, BridgeRemoteError
+from leancert.exceptions import BridgeError, BridgeRemoteError, ProtocolViolation
 from leancert.protocol import BridgeHandshake
 
 
@@ -324,7 +326,21 @@ def test_default_client_starts_from_ready_program_without_resolving_environment(
     class FakeProgram:
         id = "program_" + "a" * 64
         copy_id = "sha256:" + "b" * 64
-        description = SimpleNamespace(source_environment_id=None)
+        description = SimpleNamespace(
+            source_environment_id=None,
+            source_revision=client_module.DEFAULT_BRIDGE_SOURCE_REVISION,
+            toolchain="leanprover/lean4:v4.32.2",
+            capability_id="sha256:" + "c" * 64,
+            provenance={
+                "lean.toolchain": "leanprover/lean4:v4.32.2",
+                "leancert.bridge.revision": client_module.DEFAULT_BRIDGE_SOURCE_REVISION,
+                "leancert.bridge.version": "test",
+                "leancert.capability.digest": "sha256:" + "c" * 64,
+                "leancert.core.revision": "d" * 40,
+                "leancert.core.version": "test",
+                "leancert.protocol.version": "3.0.0",
+            },
+        )
 
         def spawn_interactive(self, *, policy):
             assert policy.timeout_seconds == 3600
@@ -337,7 +353,11 @@ def test_default_client_starts_from_ready_program_without_resolving_environment(
         def download_program(self, library, reference, *, expected_source_revision):
             assert library == client_module.DEFAULT_BRIDGE_PROGRAM_LIBRARY
             assert reference == client_module.DEFAULT_BRIDGE_PROGRAM_REFERENCE
-            assert expected_source_revision == client_module.DEFAULT_BRIDGE_SOURCE_REVISION
+            assert expected_source_revision == (
+                None
+                if reference.startswith("sha256:")
+                else client_module.DEFAULT_BRIDGE_SOURCE_REVISION
+            )
             return FakeProgram()
 
         def open_references(self, *args, **kwargs):
@@ -352,6 +372,62 @@ def test_default_client_starts_from_ready_program_without_resolving_environment(
     assert runtime.environment_calls == 0
 
 
+def test_digest_pinned_program_requires_content_addressed_stack_profile():
+    class FakeProgram:
+        description = SimpleNamespace(
+            source_revision="a" * 40,
+            toolchain="leanprover/lean4:v4.32.2",
+            capability_id=None,
+            provenance={},
+        )
+
+    client = LeanClient(
+        program=FakeProgram(),
+        program_reference="sha256:" + "b" * 64,
+    )
+    with pytest.raises(BridgeError, match="verified stack profile"):
+        _ = client.program
+
+
+def test_program_profile_must_match_live_handshake():
+    info = json.loads(
+        (Path(__file__).parent / "fixtures/bridge-contract-2.1/handshake.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    contract = BridgeHandshake.parse(info)
+
+    class FakeProgram:
+        id = "program_" + "a" * 64
+        copy_id = "sha256:" + "b" * 64
+        description = SimpleNamespace(
+            source_environment_id=None,
+            source_revision="a" * 40,
+            toolchain="leanprover/lean4:v4.32.2",
+            capability_id=contract.capability_digest,
+            provenance={
+                "lean.toolchain": "leanprover/lean4:v4.32.2",
+                "leancert.bridge.revision": "a" * 40,
+                "leancert.bridge.version": "wrong",
+                "leancert.capability.digest": contract.capability_digest,
+                "leancert.core.revision": "c" * 40,
+                "leancert.core.version": info["leancert_version"],
+                "leancert.protocol.version": info["protocol_version"],
+            },
+        )
+
+        def spawn_interactive(self, *, policy):
+            response = json.dumps({"id": 1, "result": info}) + "\n"
+            return FakeSession(response)
+
+    client = LeanClient(
+        program=FakeProgram(),
+        program_reference="sha256:" + "b" * 64,
+    )
+    with pytest.raises(ProtocolViolation, match="bridge.version"):
+        client.get_info()
+
+
 @pytest.mark.parametrize("missing", ["verified", "computed_lo", "computed_hi"])
 def test_check_bound_requires_complete_response(missing):
     result = {
@@ -360,7 +436,6 @@ def test_check_bound_requires_complete_response(missing):
         "computed_hi": {"n": 1, "d": 1},
     }
     result.pop(missing)
-    import json
 
     client = raw_client(json.dumps({"id": 1, "result": result}) + "\n")
     with pytest.raises(BridgeError, match="missing"):
