@@ -4,6 +4,8 @@ Notable user-facing changes to LeanCert Python are recorded here.
 
 ## Unreleased
 
+## 2.1.0 — 2026-08-10
+
 - Reuse one managed Bridge session across module-level `prove` calls; expose
   `close_default_prove_client()` for applications that need explicit cleanup.
 - Make replay export prepare-only by default. Independent kernel rebuilding is
