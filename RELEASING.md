@@ -20,6 +20,18 @@ and SDK versions remain independent.
 
 Run CI workflow `Build Wheels` manually or open a PR.
 
+For a local release build, start from a clean checkout or remove only the
+generated packaging directories before building. Setuptools does not guarantee
+that stale files already present under `build/` are removed:
+
+```bash
+rm -rf build dist leancert.egg-info
+pip install -e ".[release]"
+python -m build
+python scripts/check_wheel.py dist/*.whl
+twine check dist/*
+```
+
 ## 3. Publish package
 
 Create and push a tag matching the version in `pyproject.toml` (for example `v0.3.2`).
@@ -30,5 +42,6 @@ on Linux, macOS, and Windows, and uploads both to PyPI.
 ## Notes
 
 - Wheels contain no Lean or Bridge binaries.
+- Wheels contain no SDK test suite or bytecode caches.
 - Supply-chain identity comes from the content-addressed `lean-runtime`
   environment; mathematical compatibility comes from the Bridge handshake.

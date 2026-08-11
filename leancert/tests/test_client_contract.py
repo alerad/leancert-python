@@ -1,8 +1,10 @@
 """Bridge response validation without launching a bridge process."""
 
+import gc
 import io
 import json
 import threading
+import weakref
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -85,6 +87,18 @@ def test_multiple_calls_reuse_one_runtime_session():
     assert client.execution_id == "execution_test"
     assert client._session is session
     assert len(session.requests) == 2
+
+
+def test_client_finalizer_closes_abandoned_session():
+    client = raw_client("")
+    session = client._session
+    client_ref = weakref.ref(client)
+
+    del client
+    gc.collect()
+
+    assert session.running is False
+    assert client_ref() is None
 
 
 def test_runtime_transport_failure_retains_execution_diagnostic_and_retires_session():
@@ -370,6 +384,42 @@ def test_default_client_starts_from_ready_program_without_resolving_environment(
     assert client.program_id == "program_" + "a" * 64
     assert client.environment_id is None
     assert runtime.environment_calls == 0
+
+
+def test_ready_program_worker_clone_does_not_resolve_environment():
+    program = SimpleNamespace(
+        id="program_test",
+        copy_id="sha256:" + "b" * 64,
+        description=SimpleNamespace(provenance=None, source_environment_id=None),
+    )
+
+    class FakeRuntime:
+        def open_references(self, *args, **kwargs):
+            raise AssertionError("a ready-program worker must not resolve an environment")
+
+    source = LeanClient(
+        runtime=FakeRuntime(),
+        program=program,
+        require_program_profile=False,
+    )
+    worker = source._new_worker_client()
+
+    assert worker is not source
+    assert worker._program is program
+    assert worker._environment is None
+    assert worker.runtime is source.runtime
+    assert worker.execution_policy is source.execution_policy
+
+
+def test_environment_worker_clone_reuses_resolved_environment():
+    environment = SimpleNamespace(id="environment_test")
+    source = LeanClient(environment=environment)
+
+    worker = source._new_worker_client()
+
+    assert worker is not source
+    assert worker._environment is environment
+    assert worker._program is None
 
 
 def test_digest_pinned_program_requires_content_addressed_stack_profile():
