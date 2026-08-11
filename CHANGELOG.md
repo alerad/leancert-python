@@ -4,6 +4,13 @@ Notable user-facing changes to LeanCert Python are recorded here.
 
 ## Unreleased
 
+## 2.2.0 — 2026-08-10
+
+- Validate digest-pinned Bridge programs through content-addressed stack
+  profiles derived from the built binary and resolved Core dependency.
+- Carry exact Core and Bridge revisions from program provenance into checked
+  result provenance instead of reconstructing them from SDK constants.
+
 ## 2.1.0 — 2026-08-10
 
 - Reuse one managed Bridge session across module-level `prove` calls; expose

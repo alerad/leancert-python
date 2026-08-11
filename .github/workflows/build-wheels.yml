@@ -1,7 +1,7 @@
 name: Build Python distributions
 
 env:
-  LEAN_RUNTIME_VERSION: 2.0.7
+  LEAN_RUNTIME_VERSION: 2.0.9
 
 on:
   push:

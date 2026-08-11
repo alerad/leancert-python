@@ -14,6 +14,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import threading
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
@@ -49,12 +50,12 @@ def _bridge_core_expression(value: dict[str, Any]) -> dict[str, Any]:
     return lower_bridge_expression(value)
 
 
-DEFAULT_BRIDGE_PACKAGE_REF = (
-    "github:alerad/leancert-bridge@e37b16ce26fa9a94ba4344e44eae9174574f812c"
-)
-DEFAULT_BRIDGE_SOURCE_REVISION = "e37b16ce26fa9a94ba4344e44eae9174574f812c"
+DEFAULT_BRIDGE_SOURCE_REVISION = "270dbc5e5c7dfd9d5dfd57981514eb95874980d1"
+DEFAULT_BRIDGE_PACKAGE_REF = f"github:alerad/leancert-bridge@{DEFAULT_BRIDGE_SOURCE_REVISION}"
 DEFAULT_BRIDGE_PROGRAM_LIBRARY = "ghcr.io/alerad/leancert-bridge-programs"
-DEFAULT_BRIDGE_PROGRAM_REFERENCE = f"revision-{DEFAULT_BRIDGE_SOURCE_REVISION}"
+DEFAULT_BRIDGE_PROGRAM_REFERENCE = (
+    "sha256:a9a53f1eae587b83c32a0df61e592f4b50180d49033f3b41b83603893ad077c5"
+)
 DEFAULT_RUNTIME_LIBRARIES = ("ghcr.io/alerad/leancert-runtime",)
 DEFAULT_BRIDGE_COMMAND = ("lake", "exe", "@LeanCertBridge/lean_bridge")
 DEFAULT_ARTIFACT_COMMAND = (
@@ -62,6 +63,68 @@ DEFAULT_ARTIFACT_COMMAND = (
     "exe",
     "@LeanCertBridge/lean_bridge_runtime_prepare",
 )
+_PROGRAM_PROFILE_KEYS = frozenset(
+    {
+        "lean.toolchain",
+        "leancert.bridge.revision",
+        "leancert.bridge.version",
+        "leancert.capability.digest",
+        "leancert.core.revision",
+        "leancert.core.version",
+        "leancert.protocol.version",
+    }
+)
+
+
+def _program_profile(program: ReadyProgram, *, required: bool) -> Mapping[str, str] | None:
+    value = getattr(program.description, "provenance", None)
+    if not value:
+        if required:
+            raise BridgeError("Pinned Bridge program does not contain a verified stack profile")
+        return None
+    if not isinstance(value, Mapping) or not all(
+        isinstance(key, str) and isinstance(item, str) and item for key, item in value.items()
+    ):
+        raise BridgeError("Bridge program contains malformed stack provenance")
+    missing = _PROGRAM_PROFILE_KEYS - set(value)
+    if missing:
+        raise BridgeError(
+            "Bridge program stack profile is incomplete: " + ", ".join(sorted(missing))
+        )
+    if value["leancert.bridge.revision"] != program.description.source_revision:
+        raise BridgeError("Bridge program profile disagrees with its source revision")
+    if any(
+        re.fullmatch(r"[0-9a-f]{40,64}", value[key]) is None
+        for key in ("leancert.bridge.revision", "leancert.core.revision")
+    ):
+        raise BridgeError("Bridge program profile contains a non-exact source revision")
+    if re.fullmatch(r"sha256:[0-9a-f]{64}", value["leancert.capability.digest"]) is None:
+        raise BridgeError("Bridge program profile contains an invalid capability identity")
+    if value["lean.toolchain"] != program.description.toolchain:
+        raise BridgeError("Bridge program profile disagrees with its Lean toolchain")
+    capability_id = getattr(program.description, "capability_id", None)
+    if capability_id != value["leancert.capability.digest"]:
+        raise BridgeError("Bridge program profile disagrees with its capability identity")
+    return value
+
+
+def _validate_profile_handshake(profile: Mapping[str, str], contract: BridgeHandshake) -> None:
+    expected = {
+        "leancert.bridge.version": contract.bridge_version,
+        "leancert.capability.digest": contract.capability_digest,
+        "leancert.core.version": contract.leancert_version,
+        "leancert.protocol.version": str(contract.protocol_version),
+    }
+    mismatches = [
+        key for key, actual in expected.items() if actual is None or profile.get(key) != actual
+    ]
+    if not profile["lean.toolchain"].endswith(f":v{contract.lean_version}"):
+        mismatches.append("lean.toolchain")
+    if mismatches:
+        raise ProtocolViolation(
+            "Bridge program profile disagrees with its live handshake: "
+            + ", ".join(sorted(mismatches))
+        )
 
 
 def _new_default_runtime() -> Runtime:
@@ -106,6 +169,7 @@ class LeanClient:
         enclosure_profile: str | Path | EnclosureProfile | None = None,
         program_library: str = DEFAULT_BRIDGE_PROGRAM_LIBRARY,
         program_reference: str = DEFAULT_BRIDGE_PROGRAM_REFERENCE,
+        require_program_profile: bool | None = None,
     ):
         """
         Initialize the client.
@@ -115,6 +179,8 @@ class LeanClient:
             runtime: Optional runtime instance, useful for a custom cache/backend.
             environment: Optional pre-built environment. This is the extension
                 point for downstream profiled Bridge executables.
+            program: Optional pre-built ready program, primarily for testing or
+                an explicitly managed runtime profile.
             execution_policy: Resource policy for the interactive Bridge session.
             resolution_timeout_seconds: Maximum time allowed for first-use Lake
                 dependency resolution. Cold Mathlib clones can exceed the
@@ -123,6 +189,10 @@ class LeanClient:
                 environment lock and run before the environment build. Pass an
                 empty sequence for a Bridge package without external artifacts.
             command: Command to start inside the managed environment.
+            program_library: OCI library containing ready Bridge programs.
+            program_reference: Immutable digest or legacy revision reference.
+            require_program_profile: Require content-addressed stack provenance.
+                Digest references enable this automatically.
         """
         if not package_ref:
             raise ValueError("package_ref must not be empty")
@@ -146,6 +216,11 @@ class LeanClient:
         self._program = program
         self.program_library = program_library
         self.program_reference = program_reference
+        self.require_program_profile = (
+            program_reference.startswith("sha256:")
+            if require_program_profile is None
+            else require_program_profile
+        )
         self.execution_policy = execution_policy or ExecutionPolicy(
             timeout_seconds=3600,
             max_output_bytes=10_000_000,
@@ -183,8 +258,13 @@ class LeanClient:
             self._program = self.runtime.download_program(
                 self.program_library,
                 self.program_reference,
-                expected_source_revision=DEFAULT_BRIDGE_SOURCE_REVISION,
+                expected_source_revision=(
+                    None
+                    if self.program_reference.startswith("sha256:")
+                    else DEFAULT_BRIDGE_SOURCE_REVISION
+                ),
             )
+        _program_profile(self._program, required=self.require_program_profile)
         return self._program
 
     @property
@@ -281,6 +361,10 @@ class LeanClient:
 
         info = self._call_raw("get_info", {})
         contract = BridgeHandshake.parse(info)
+        if self.enclosure_profile is None and self._environment is None:
+            profile = _program_profile(self.program, required=self.require_program_profile)
+            if profile is not None:
+                _validate_profile_handshake(profile, contract)
         if self.enclosure_profile is not None:
             self.enclosure_profile.validate_handshake(contract.enclosure_profile)
         self._bridge_info = dict(contract.raw)
@@ -421,6 +505,10 @@ class LeanClient:
         """Get bridge metadata including API and Lean versions."""
         result = self.call("get_info", {})
         contract = BridgeHandshake.parse(result)
+        if self.enclosure_profile is None and self._environment is None:
+            profile = _program_profile(self.program, required=self.require_program_profile)
+            if profile is not None:
+                _validate_profile_handshake(profile, contract)
         if self.enclosure_profile is not None:
             self.enclosure_profile.validate_handshake(contract.enclosure_profile)
         self._bridge_info = dict(contract.raw)
