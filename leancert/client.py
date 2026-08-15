@@ -10,11 +10,13 @@ It should not be used directly by end users - use the Solver class instead.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import math
 import os
 import re
+import sys
 import threading
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
@@ -48,6 +50,34 @@ def _bridge_core_expression(value: dict[str, Any]) -> dict[str, Any]:
     from .expression_codec import lower_bridge_expression
 
     return lower_bridge_expression(value)
+
+
+# Bridge requests and responses carry exact rationals whose integer parts can
+# exceed CPython's int<->str conversion guard (sys.set_int_max_str_digits,
+# default 4300 digits): a certified enclosure denominator from a deep interval
+# refinement is easily tens of thousands of digits. Protocol JSON encoding and
+# decoding must not crash on exact numbers the Bridge legitimately produced.
+_INT_STR_DIGITS_FLOOR = 2_000_000
+_INT_STR_DIGITS_LOCK = threading.Lock()
+
+
+@contextlib.contextmanager
+def _exact_integer_strings():
+    """Temporarily raise the interpreter int<->str digit limit for protocol
+    JSON encode/decode. The limit is interpreter-global, so the raise/restore
+    pair is serialized under a module lock; the previous limit is restored
+    even on error. No-op when the current limit already suffices (including
+    limit 0 = unlimited)."""
+    with _INT_STR_DIGITS_LOCK:
+        previous = sys.get_int_max_str_digits()
+        needs_raise = previous != 0 and previous < _INT_STR_DIGITS_FLOOR
+        if needs_raise:
+            sys.set_int_max_str_digits(_INT_STR_DIGITS_FLOOR)
+        try:
+            yield
+        finally:
+            if needs_raise:
+                sys.set_int_max_str_digits(previous)
 
 
 DEFAULT_BRIDGE_SOURCE_REVISION = "270dbc5e5c7dfd9d5dfd57981514eb95874980d1"
@@ -450,9 +480,10 @@ class LeanClient:
 
         # Send request
         try:
-            request_json = json.dumps(
-                request, allow_nan=False, ensure_ascii=False, separators=(",", ":")
-            )
+            with _exact_integer_strings():
+                request_json = json.dumps(
+                    request, allow_nan=False, ensure_ascii=False, separators=(",", ":")
+                )
         except (TypeError, ValueError) as exc:
             raise ProtocolViolation(f"Request is not valid JSON data: {exc}") from exc
         try:
@@ -466,8 +497,11 @@ class LeanClient:
             ) from exc
 
         try:
-            response = json.loads(response_line)
-        except json.JSONDecodeError as exc:
+            with _exact_integer_strings():
+                response = json.loads(response_line)
+        except (json.JSONDecodeError, ValueError) as exc:
+            # ValueError also covers an int literal beyond the raised digit
+            # floor — surfaced as a protocol failure, not a silent crash.
             self._retire_session(session)
             excerpt = response_line if len(response_line) <= 500 else response_line[:500] + "…"
             raise BridgeError(

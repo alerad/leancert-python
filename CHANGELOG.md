@@ -4,6 +4,16 @@ Notable user-facing changes to LeanCert Python are recorded here.
 
 ## Unreleased
 
+- Protocol JSON encode/decode no longer crashes on exact rationals whose
+  integer parts exceed CPython's int<->str conversion guard (default 4300
+  digits); the limit is raised locally, under a lock, for the encode/decode
+  and restored afterwards. Found live: a Bridge response carrying a
+  26,518-digit exact numerator aborted `json.loads` mid-proof.
+- Documented that tight transcendental margins near function roots (e.g.
+  `sin` near pi) may need `ProveConfig(taylor_depth=...)` above the default
+  10, and that reformulating at a smaller argument (`cos` at pi/2 instead of
+  `sin` near pi) is often cheaper than deeper Taylor enclosures.
+
 ## 2.2.0 — 2026-08-10
 
 - Validate digest-pinned Bridge programs through content-addressed stack

@@ -106,6 +106,22 @@ identity and therefore remain precisely unsupported. `ast.pi` and
 `ast.euler_mascheroni` use the canonical negotiated wire identities when the
 Bridge advertises named constants.
 
+### Tight margins near transcendental roots
+
+The default Taylor effort (`ProveConfig(taylor_depth=10)`) can be too shallow
+when the claim's margin is comparable to the enclosure's remainder — the
+canonical case being `sin` evaluated near pi, where a `1e-4`-scale sign claim
+meets a `~2e-3` remainder and returns `Inconclusive`. Two remedies, in order
+of preference:
+
+1. Reformulate at a smaller argument, where the same series converges much
+   faster: `cos` at `pi/2` resolves what `sin` near `pi` cannot
+   (`ast.cos(ast.const(Fraction(15722, 10**4))) < 0` certifies
+   `pi < 3.1444` at default depth).
+2. Raise the effort: `lc.ProveConfig(taylor_depth=20)` resolves
+   `sin(3.1415) > 0`. Depth is a checker-effort knob and increases enclosure
+   cost; prefer remedy 1 when a reformulation exists.
+
 ## Exact normalized claims
 
 Some claims reduce exactly before a Bridge is needed:

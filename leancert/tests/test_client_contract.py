@@ -490,3 +490,26 @@ def test_check_bound_requires_complete_response(missing):
     client = raw_client(json.dumps({"id": 1, "result": result}) + "\n")
     with pytest.raises(BridgeError, match="missing"):
         client.check_bound({}, [], {"n": 1, "d": 1}, True)
+
+
+def test_huge_exact_rationals_survive_protocol_json():
+    """Bridge responses may carry exact rationals far beyond CPython's default
+    int<->str digit guard (4300); observed live: a 26,518-digit numerator in a
+    checked enclosure. Both protocol directions must handle them, and the
+    interpreter-global limit must be restored afterwards."""
+    import sys
+
+    big = 10**30000
+    with client_module._exact_integer_strings():
+        response = json.dumps({"id": 1, "result": {"n": big, "d": 1}}) + "\n"
+    previous = sys.get_int_max_str_digits()
+
+    client = raw_client(response)
+    result = client.call("ping", {"payload": big})
+
+    assert result == {"n": big, "d": 1}
+    assert sys.get_int_max_str_digits() == previous
+    # the request direction also carried the big integer
+    with client_module._exact_integer_strings():
+        sent = json.loads(client._session.requests[0])
+    assert sent["params"]["payload"] == big
