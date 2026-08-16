@@ -1,0 +1,29 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+type: software
+title: "LeanCert Python SDK: formal verification for numerical Python code"
+authors:
+  - family-names: "Radisic"
+    given-names: "Alejandro"
+    orcid: "https://orcid.org/0009-0001-7612-1082"
+repository-code: "https://github.com/alerad/leancert-python"
+license-url: "https://github.com/alerad/leancert-python/blob/main/LICENSE"
+version: "2.2.0"
+date-released: "2026-08-11"
+abstract: >-
+  Python SDK for LeanCert: prove properties of numerical Python code for
+  all inputs, powered by Lean 4. Numerical candidates from NumPy/SciPy are
+  treated as untrusted inputs; accepted results carry exact rational
+  certificates checked against a pinned, precompiled checker with
+  content-addressed provenance (compiled_checker vs kernel_replay tiers).
+  Distributed on PyPI as "leancert"; uses lean-runtime for pinned,
+  pip-installable Lean environments. SDK versions through
+  v0.3.2-apache-final are Apache-2.0; later versions are source-available
+  under the LeanCert evaluation license (see LICENSE).
+keywords:
+  - "formal verification"
+  - "Lean 4"
+  - "Python"
+  - "verified numerics"
+  - "interval arithmetic"
+  - "certificates"
