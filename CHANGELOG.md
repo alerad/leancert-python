@@ -4,6 +4,11 @@ Notable user-facing changes to LeanCert Python are recorded here.
 
 ## Unreleased
 
+- Migrated the managed execution integration to `lean-runtime>=4.0.1,<5.0.0`.
+  Ordinary checks continue to use a pinned ready program, while full Bridge
+  environments now default to exact source materialization because Runtime 4
+  environment libraries contain source-free check capsules that cannot launch
+  interactive tools.
 - Protocol JSON encode/decode no longer crashes on exact rationals whose
   integer parts exceed CPython's int<->str conversion guard (default 4300
   digits); the limit is raised locally, under a lock, for the encode/decode

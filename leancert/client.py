@@ -14,7 +14,6 @@ import contextlib
 import hashlib
 import json
 import math
-import os
 import re
 import sys
 import threading
@@ -84,9 +83,14 @@ DEFAULT_BRIDGE_SOURCE_REVISION = "270dbc5e5c7dfd9d5dfd57981514eb95874980d1"
 DEFAULT_BRIDGE_PACKAGE_REF = f"github:alerad/leancert-bridge@{DEFAULT_BRIDGE_SOURCE_REVISION}"
 DEFAULT_BRIDGE_PROGRAM_LIBRARY = "ghcr.io/alerad/leancert-bridge-programs"
 DEFAULT_BRIDGE_PROGRAM_REFERENCE = (
-    "sha256:a9a53f1eae587b83c32a0df61e592f4b50180d49033f3b41b83603893ad077c5"
+    "sha256:aea1359a239e92cdb283eea549c4be5cc3bb5118af38a124eecf1d64299c80af"
 )
-DEFAULT_RUNTIME_LIBRARIES = ("ghcr.io/alerad/leancert-runtime",)
+# Runtime 4 environment libraries contain source-free check capsules.  The
+# Bridge environment route needs sources and build inputs for interactive
+# execution, so its safe default is exact source materialization. Applications
+# with a separately managed full environment can inject its Runtime or
+# Environment explicitly.
+DEFAULT_RUNTIME_LIBRARIES: tuple[str, ...] = ()
 DEFAULT_BRIDGE_COMMAND = ("lake", "exe", "@LeanCertBridge/lean_bridge")
 DEFAULT_ARTIFACT_COMMAND = (
     "lake",
@@ -158,9 +162,7 @@ def _validate_profile_handshake(profile: Mapping[str, str], contract: BridgeHand
 
 
 def _new_default_runtime() -> Runtime:
-    """Prefer LeanCert's downloadable environments while honoring user policy."""
-    if "LEAN_RUNTIME_LIBRARIES" in os.environ:
-        return Runtime()
+    """Prepare full Bridge environments from source, never from check capsules."""
     return Runtime(libraries=DEFAULT_RUNTIME_LIBRARIES)
 
 
