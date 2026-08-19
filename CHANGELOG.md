@@ -4,6 +4,8 @@ Notable user-facing changes to LeanCert Python are recorded here.
 
 ## Unreleased
 
+## 2.3.0 — 2026-08-18
+
 - Migrated the managed execution integration to `lean-runtime>=4.0.1,<5.0.0`.
   Ordinary checks continue to use a pinned ready program, while full Bridge
   environments now default to exact source materialization because Runtime 4
