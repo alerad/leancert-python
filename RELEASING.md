@@ -2,7 +2,9 @@
 
 ## 1. Release runtime dependencies
 
-Release the minimum compatible `lean-runtime` version first. Then publish the
+Release the minimum compatible `lean-runtime` version first. Runtime 4 ready
+programs must be created and published with that release; Runtime 2 program
+identities are not promotion inputs for the Runtime 4 SDK. Then publish the
 Bridge's multi-platform ready program and copy the final immutable OCI index
 digest into `DEFAULT_BRIDGE_PROGRAM_REFERENCE` in `leancert/client.py`.
 
@@ -13,8 +15,10 @@ contract must download the pinned digest and verify that embedded profile
 against the running handshake before release.
 
 The exact Bridge package reference remains the source-build fallback used for
-replay audits and custom registered-enclosure profiles. Core, Bridge, Runtime,
-and SDK versions remain independent.
+replay audits and custom registered-enclosure profiles. Runtime 4 environment
+libraries are check-only capsules, so this full interactive environment route
+defaults to source materialization. Core, Bridge, Runtime, and SDK versions
+remain independent.
 
 ## 2. Validate wheel build
 

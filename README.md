@@ -31,16 +31,18 @@ revisions, Lean toolchain, protocol, and capability identity. Before accepting
 checked results, the SDK verifies that this profile agrees with both the
 program description and the running Bridge handshake.
 
-Full LeanCert and Mathlib environments are hydrated lazily only for independent
-kernel replay, source rebuild audits, or custom registered-enclosure profiles.
+Full LeanCert and Mathlib environments are materialized from their exact source
+locks only for independent kernel replay, source rebuild audits, or custom
+registered-enclosure profiles. Lean Runtime 4 registry environments are
+source-free check capsules and cannot launch the interactive Bridge.
 Those environments remain distinct from ready programs in result provenance: a
 program establishes `compiled_checker`, while successful exported proof replay
 establishes `kernel_replay`.
 
-Set `LEAN_RUNTIME_AVAILABILITY=required` when CI must use a downloadable
-environment, or `LEAN_RUNTIME_AVAILABILITY=local` to audit the source-build
-path. An explicit `LEAN_RUNTIME_LIBRARIES` value replaces the SDK defaults,
-including an empty value to disable environment-library lookup.
+The SDK disables environment-library lookup on its default full-Bridge route,
+even when `LEAN_RUNTIME_LIBRARIES` is set. Applications with an explicitly
+managed full environment can inject its `Runtime` or `Environment` into
+`LeanClient`.
 
 The v1 overhaul also includes a bridge-independent, exact semantic model under
 `leancert.ast`. Its versioned encoding, binder rules, claim closure, and legacy

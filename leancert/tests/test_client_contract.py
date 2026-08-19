@@ -167,7 +167,7 @@ def test_environment_resolution_is_lazy():
     assert runtime.calls == [(["github:a/b@v1"], 3600.0)]
 
 
-def test_default_runtime_prefers_leancert_and_shared_environment_libraries(monkeypatch):
+def test_default_runtime_disables_capsule_libraries_for_full_bridge_environments(monkeypatch):
     calls = []
 
     def runtime_factory(**kwargs):
@@ -180,7 +180,7 @@ def test_default_runtime_prefers_leancert_and_shared_environment_libraries(monke
     client_module._new_default_runtime()
 
     assert calls == [{"libraries": client_module.DEFAULT_RUNTIME_LIBRARIES}]
-    assert client_module.DEFAULT_RUNTIME_LIBRARIES == ("ghcr.io/alerad/leancert-runtime",)
+    assert client_module.DEFAULT_RUNTIME_LIBRARIES == ()
 
 
 def test_default_bridge_environment_uses_published_artifact_recipe():
@@ -193,7 +193,7 @@ def test_default_bridge_environment_uses_published_artifact_recipe():
     )
 
 
-def test_explicit_runtime_library_environment_replaces_sdk_defaults(monkeypatch):
+def test_runtime_library_environment_cannot_turn_full_bridge_into_capsule(monkeypatch):
     calls = []
 
     def runtime_factory(**kwargs):
@@ -205,7 +205,7 @@ def test_explicit_runtime_library_environment_replaces_sdk_defaults(monkeypatch)
 
     client_module._new_default_runtime()
 
-    assert calls == [{}]
+    assert calls == [{"libraries": client_module.DEFAULT_RUNTIME_LIBRARIES}]
 
 
 def test_default_clients_share_one_resolved_environment(monkeypatch):
