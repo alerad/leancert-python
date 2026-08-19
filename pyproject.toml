@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "leancert"
-version = "2.2.0"
+version = "2.3.0"
 description = "Formal verification for numerical Python code - powered by Lean4"
 readme = "README.md"
 license = "LicenseRef-LeanCert-Evaluation-1.0 AND Apache-2.0"
